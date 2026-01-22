@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List
-from embedding_utils import E5LargeEmbedder
+from embedding.embedding_utils import E5LargeEmbedder
 
 # -----------------------------
 # Request & Response Schemas

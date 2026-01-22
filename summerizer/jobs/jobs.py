@@ -5,18 +5,18 @@ from pathlib import Path
 from typing import Optional
 import fitz
 
-from pdf_utils import process_page, process_page_with_positions
-from chunking_utils import (
+from pdf.pdf_utils import process_page, process_page_with_positions
+from chunking.chunking_utils import (
     semantic_chunk_text,
     create_multimodal_chunks,
     create_semantic_multimodal_chunks,
     SemanticChunker
 )
-from embedding_client import EmbeddingClient
+from embedding.embedding_client import EmbeddingClient
 from vector_store.milvus_store import MilvusVectorStore
-from chunk_indexer import ChunkIndexer
-from vision_utils import VisionProcessor
-from job_state import (
+from chunking.chunk_indexer import ChunkIndexer
+from pdf.vision_utils import VisionProcessor
+from jobs.job_state import (
     update_job,
     init_pdf,
     update_pdf

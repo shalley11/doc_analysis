@@ -3,6 +3,11 @@ Test script for semantic chunking implementation with realistic long-form conten
 Includes text, image summaries, chart summaries, and table summaries.
 """
 import sys
+from pathlib import Path
+
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
 # Test 1: Basic imports
 print("=" * 60)
@@ -10,7 +15,7 @@ print("TEST 1: Import checks")
 print("=" * 60)
 
 try:
-    from chunking_utils import (
+    from chunking.chunking_utils import (
         SemanticChunker,
         cosine_similarity,
         calculate_sentence_similarities,

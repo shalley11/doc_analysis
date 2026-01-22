@@ -9,9 +9,9 @@ from fastapi.staticfiles import StaticFiles
 import redis
 from rq import Queue
 
-from pdf_utils import process_page, page_to_markdown
-from jobs import process_pdf_batch, process_pdf_batch_multimodal
-from job_state import init_job, get_job
+from pdf.pdf_utils import process_page, page_to_markdown
+from jobs.jobs import process_pdf_batch, process_pdf_batch_multimodal
+from jobs.job_state import init_job, get_job
 
 app = FastAPI(
     title="PDF Analysis API",

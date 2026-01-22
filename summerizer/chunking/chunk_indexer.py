@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-from embedding_client import EmbeddingClient
+from embedding.embedding_client import EmbeddingClient
 from vector_store.milvus_store import MilvusVectorStore
 
 
