@@ -31,6 +31,16 @@ MILVUS_PORT = 19530
 # Vision API configuration (optional)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+
+# Gemma 3 4B configuration (recommended for vision)
+# Set USE_GEMMA3=true and GEMMA3_MODE=local or GEMMA3_MODE=api
+USE_GEMMA3 = os.environ.get("USE_GEMMA3", "false").lower() == "true"
+GEMMA3_MODE = os.environ.get("GEMMA3_MODE", "local")  # "local" or "api"
+
+# Ollama configuration (for local models)
+OLLAMA_MODEL = os.environ.get("OLLAMA_VISION_MODEL")  # e.g., "llava", "moondream"
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 
 
 def process_pdf_batch(batch_id: str, input_dir: str, output_dir: str):
@@ -223,11 +233,17 @@ def process_pdf_batch_multimodal(
     indexer = ChunkIndexer(embedder, vector_store, EMBEDDING_DIM)
 
     # Initialize vision processor (optional)
+    # Priority: Gemma3 > Anthropic > OpenAI > Gemini > Ollama > Fallback
     vision_processor = None
     if use_vision:
         vision_processor = VisionProcessor(
+            use_gemma3=USE_GEMMA3,
+            gemma3_mode=GEMMA3_MODE,
             openai_api_key=OPENAI_API_KEY,
-            anthropic_api_key=ANTHROPIC_API_KEY
+            anthropic_api_key=ANTHROPIC_API_KEY,
+            google_api_key=GOOGLE_API_KEY,
+            ollama_model=OLLAMA_MODEL,
+            ollama_base_url=OLLAMA_BASE_URL
         )
 
     # Count total pages
