@@ -1,5 +1,244 @@
-1. uvicorn embedding_service:app --host 0.0.0.0 --port 8000 --workers 1
-       Use 1 worker for GPU (avoids CUDA conflicts).
-       Can use more workers on CPU if needed.
+================================================================================
+PDF Summarizer - Documentation
+================================================================================
 
-2.
+A multimodal PDF processing service that extracts text, tables, and images,
+creates semantic chunks, and indexes them into Milvus for similarity search.
+
+================================================================================
+PROJECT STRUCTURE
+================================================================================
+
+summerizer/
+├── main.py                 # FastAPI entry point
+├── request.py              # Request models
+├── requirement.txt         # Dependencies
+├── .gitignore
+│
+├── chunking/               # Text chunking and indexing
+│   ├── chunking_utils.py   # Semantic chunking with embeddings
+│   └── chunk_indexer.py    # Milvus vector indexing
+│
+├── jobs/                   # Background job processing
+│   ├── jobs.py             # PDF batch processing logic
+│   └── job_state.py        # Redis-based job state management
+│
+├── pdf/                    # PDF extraction and vision
+│   ├── pdf_utils.py        # PDF text/image/table extraction
+│   └── vision_utils.py     # Vision model integration (Gemma3, OpenAI, etc.)
+│
+├── embedding/              # Text embeddings
+│   ├── embedding_client.py # HTTP client for embedding service
+│   ├── embedding_service.py# Standalone FastAPI embedding service
+│   └── embedding_utils.py  # E5-Large embedder implementation
+│
+├── vector_store/           # Vector database
+│   ├── base.py             # Abstract base class
+│   └── milvus_store.py     # Milvus implementation
+│
+├── docs/                   # Documentation
+│   └── documentation.txt
+│
+└── tests/                  # Test files
+    └── test_semantic_chunking.py
+
+================================================================================
+REQUIREMENTS
+================================================================================
+
+External Services:
+- Redis (localhost:6379) - Job queue and state management
+- Milvus (localhost:19530) - Vector database for similarity search
+
+Python Dependencies (requirement.txt):
+- fastapi, uvicorn - Web framework
+- pymupdf (fitz) - PDF processing
+- transformers, torch - ML models
+- numpy - Numerical operations
+- requests - HTTP client
+- pymilvus - Milvus client
+- redis, rq - Job queue
+- python-multipart - File uploads
+
+================================================================================
+RUNNING THE SERVICES
+================================================================================
+
+1. Start Embedding Service:
+   cd summerizer
+   uvicorn embedding.embedding_service:app --host 0.0.0.0 --port 8000 --workers 1
+
+   Note: Use 1 worker for GPU to avoid CUDA conflicts.
+
+2. Start Redis:
+   redis-server
+
+3. Start Milvus:
+   # Using Docker:
+   docker-compose up -d milvus
+
+4. Start RQ Worker:
+   cd summerizer
+   rq worker pdf-processing
+
+5. Start Main API:
+   cd summerizer
+   uvicorn main:app --host 0.0.0.0 --port 8080
+
+================================================================================
+API ENDPOINTS
+================================================================================
+
+Health Check:
+  GET /health
+  Returns: {"status": "ok"}
+
+----- V1 API (Basic) -----
+
+POST /api/v1/pdf/analyze
+  Upload PDFs for basic processing.
+  Parameters:
+    - files: PDF files (multipart)
+    - preview_only: "yes"/"no" (default: "yes")
+    - preview_pages: int (default: 1)
+  Returns: batch_id, preview markdown
+
+GET /api/v1/pdf/status/{batch_id}
+  Get job status and progress.
+
+----- V2 API (Multimodal) -----
+
+POST /api/v2/pdf/analyze
+  Upload PDFs with multimodal processing (text, tables, images).
+  Parameters:
+    - files: PDF files (multipart)
+    - use_vision: "yes"/"no" - Enable vision model for image/table descriptions
+    - use_semantic_chunking: "yes"/"no" - Enable embedding-based chunking
+    - semantic_similarity_threshold: float (0-1, default: 0.5)
+    - semantic_percentile_threshold: float (default: 25)
+    - semantic_min_chunk_size: int (default: 50 words)
+    - semantic_max_chunk_size: int (default: 500 words)
+    - preview_only: "yes"/"no"
+    - preview_pages: int
+  Returns: batch_id, processing mode, static_base_url for images
+
+GET /api/v2/pdf/chunks/{batch_id}
+  Get all chunks for a batch.
+  Parameters:
+    - content_type: Filter by "text", "table", or "image"
+
+GET /api/v2/pdf/summary/{batch_id}
+  Get batch processing summary with content type breakdown.
+
+================================================================================
+SEMANTIC CHUNKING
+================================================================================
+
+Traditional chunking splits text by word count. Semantic chunking uses
+sentence embeddings to detect topic boundaries, producing more coherent chunks.
+
+How it works:
+1. Split text into sentences
+2. Generate embeddings for each sentence
+3. Calculate cosine similarity between consecutive sentences
+4. Identify breakpoints where similarity drops (topic shift)
+5. Group sentences into chunks respecting min/max size constraints
+
+Parameters:
+- similarity_threshold: Direct threshold for breakpoints (0-1)
+- percentile_threshold: Use bottom N% of similarities as breakpoints
+- min_chunk_size: Minimum words per chunk
+- max_chunk_size: Maximum words per chunk
+
+================================================================================
+VISION MODEL CONFIGURATION
+================================================================================
+
+Vision models generate descriptions for images and tables in PDFs.
+
+Priority order: Gemma3 > Anthropic > OpenAI > Gemini > Ollama > Fallback
+
+Environment Variables:
+
+  # Gemma 3 4B (Recommended)
+  USE_GEMMA3=true
+  GEMMA3_MODE=local          # "local" (Ollama) or "api" (Google AI)
+  GOOGLE_API_KEY=xxx         # Required for api mode
+
+  # Ollama (for local models)
+  OLLAMA_BASE_URL=http://localhost:11434
+  OLLAMA_VISION_MODEL=llava  # or moondream, bakllava, etc.
+
+  # Cloud APIs
+  OPENAI_API_KEY=xxx
+  ANTHROPIC_API_KEY=xxx
+  GOOGLE_API_KEY=xxx
+
+Gemma 3 4B Modes:
+- local: Uses Ollama (ollama run gemma3:4b)
+- api: Uses Google AI Studio API
+
+================================================================================
+CHUNK FORMAT
+================================================================================
+
+Each chunk contains:
+{
+  "chunk_id": "sha256_hash",      # Deterministic ID
+  "text": "chunk content...",     # Text content
+  "pdf_name": "document.pdf",
+  "page_no": 1,
+  "chunk_number": 0,
+  "content_type": "text|table|image",
+  "position": 0,                  # Reading order position
+  "image_link": "path/to/image",  # For image chunks
+  "table_link": "path/to/table",  # For table chunks
+  "context_before_id": "...",     # Previous chunk ID
+  "context_after_id": "..."       # Next chunk ID
+}
+
+================================================================================
+MILVUS SCHEMA
+================================================================================
+
+Collection per session: pdf_session_{batch_id}
+
+Fields:
+- chunk_id: VARCHAR (primary key)
+- embedding: FLOAT_VECTOR (1024 dim)
+- text: VARCHAR
+- pdf_name: VARCHAR
+- page_no: INT64
+- chunk_number: INT64
+- content_type: VARCHAR
+- position: INT64
+- image_link: VARCHAR
+- table_link: VARCHAR
+- context_before_id: VARCHAR
+- context_after_id: VARCHAR
+
+TTL: 3600 seconds (configurable)
+
+================================================================================
+EXAMPLES
+================================================================================
+
+Basic PDF Analysis:
+  curl -X POST http://localhost:8080/api/v1/pdf/analyze \
+    -F "files=@document.pdf" \
+    -F "preview_only=no"
+
+Multimodal with Semantic Chunking:
+  curl -X POST http://localhost:8080/api/v2/pdf/analyze \
+    -F "files=@document.pdf" \
+    -F "use_vision=yes" \
+    -F "use_semantic_chunking=yes" \
+    -F "semantic_similarity_threshold=0.5"
+
+Check Status:
+  curl http://localhost:8080/api/v1/pdf/status/{batch_id}
+
+Get Chunks:
+  curl http://localhost:8080/api/v2/pdf/chunks/{batch_id}?content_type=table
+
+================================================================================
