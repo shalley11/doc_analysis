@@ -3,7 +3,8 @@ PDF Summarizer - Documentation
 ================================================================================
 
 A multimodal PDF processing service that extracts text, tables, and images,
-creates semantic chunks, and indexes them into Milvus for similarity search.
+creates semantic chunks, indexes them into Milvus for similarity search,
+and provides Q&A capabilities with LLM-generated answers and citations.
 
 ================================================================================
 PROJECT STRUCTURE
@@ -35,6 +36,12 @@ summerizer/
 ├── vector_store/           # Vector database
 │   ├── base.py             # Abstract base class
 │   └── milvus_store.py     # Milvus implementation
+│
+├── qa/                     # Question & Answer module
+│   ├── retriever.py        # Milvus similarity search
+│   ├── generator.py        # LLM response generation
+│   ├── qa_service.py       # Q&A orchestration
+│   └── prompts.py          # Citation-aware prompt templates
 │
 ├── docs/                   # Documentation
 │   └── documentation.txt
@@ -129,6 +136,54 @@ GET /api/v2/pdf/chunks/{batch_id}
 
 GET /api/v2/pdf/summary/{batch_id}
   Get batch processing summary with content type breakdown.
+
+----- Q&A API -----
+
+POST /api/v2/qa/ask/{batch_id}
+  Ask a question about the ingested PDFs.
+  Request Body (JSON):
+    {
+      "question": "What is the main topic?",
+      "top_k": 5,
+      "temperature": 0.7,
+      "include_sources": true,
+      "llm_provider": "ollama",    # optional: ollama, openai, anthropic, gemini
+      "llm_model": "llama3"        # optional: model name
+    }
+  Returns: answer with citations and source chunks
+
+POST /api/v2/qa/summarize/{batch_id}
+  Generate a summary of the documents.
+  Request Body (JSON):
+    {
+      "summary_type": "brief",     # brief, detailed, or bullets
+      "max_chunks": 20,
+      "temperature": 0.7,
+      "llm_provider": "ollama",
+      "llm_model": "llama3"
+    }
+  Returns: generated summary with citations
+
+POST /api/v2/qa/chat/{batch_id}
+  Multi-turn conversation with documents.
+  Request Body (JSON):
+    {
+      "messages": [
+        {"role": "user", "content": "What is this about?"},
+        {"role": "assistant", "content": "This document discusses..."},
+        {"role": "user", "content": "Tell me more about section 2"}
+      ],
+      "top_k": 5,
+      "temperature": 0.7
+    }
+  Returns: response with sources
+
+GET /api/v2/qa/search/{batch_id}
+  Search chunks without LLM generation.
+  Parameters:
+    - query: Search query (required)
+    - top_k: Number of results (default: 5)
+    - content_type: Filter by type (optional)
 
 ================================================================================
 SEMANTIC CHUNKING
@@ -240,5 +295,75 @@ Check Status:
 
 Get Chunks:
   curl http://localhost:8080/api/v2/pdf/chunks/{batch_id}?content_type=table
+
+Ask a Question (with Ollama):
+  curl -X POST http://localhost:8080/api/v2/qa/ask/{batch_id} \
+    -H "Content-Type: application/json" \
+    -d '{
+      "question": "What are the main findings?",
+      "top_k": 5,
+      "include_sources": true
+    }'
+
+Ask with OpenAI:
+  curl -X POST http://localhost:8080/api/v2/qa/ask/{batch_id} \
+    -H "Content-Type: application/json" \
+    -d '{
+      "question": "Summarize the methodology",
+      "llm_provider": "openai",
+      "llm_model": "gpt-4o-mini"
+    }'
+
+Generate Summary:
+  curl -X POST http://localhost:8080/api/v2/qa/summarize/{batch_id} \
+    -H "Content-Type: application/json" \
+    -d '{"summary_type": "bullets"}'
+
+Search Chunks:
+  curl "http://localhost:8080/api/v2/qa/search/{batch_id}?query=methodology&top_k=3"
+
+================================================================================
+Q&A MODULE
+================================================================================
+
+The Q&A module enables question answering over ingested PDFs using RAG
+(Retrieval-Augmented Generation).
+
+Flow:
+1. User uploads PDF → chunks created → indexed in Milvus
+2. User asks a question
+3. Question is embedded and similar chunks retrieved from Milvus
+4. Retrieved chunks + question sent to LLM
+5. LLM generates answer with citations [Source: PDF_NAME, Page X]
+
+LLM Providers:
+- ollama: Local inference (default). Requires Ollama running with a model.
+          ollama run llama3
+- openai: OpenAI API. Requires OPENAI_API_KEY environment variable.
+- anthropic: Anthropic API. Requires ANTHROPIC_API_KEY.
+- gemini: Google Gemini API. Requires GOOGLE_API_KEY.
+
+Citation Format:
+  Answers include citations like [Source: document.pdf, Page 5] to
+  indicate where information came from. The sources array in the
+  response provides full details including text excerpts and scores.
+
+Response Example:
+  {
+    "batch_id": "abc-123",
+    "question": "What is the main topic?",
+    "answer": "The document discusses climate change impacts on agriculture
+               [Source: report.pdf, Page 2]. Key findings include...",
+    "chunks_retrieved": 5,
+    "sources": [
+      {
+        "pdf_name": "report.pdf",
+        "page_no": 2,
+        "content_type": "text",
+        "text_preview": "Climate change affects crop yields...",
+        "score": 0.8921
+      }
+    ]
+  }
 
 ================================================================================

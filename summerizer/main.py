@@ -9,9 +9,54 @@ from fastapi.staticfiles import StaticFiles
 import redis
 from rq import Queue
 
+from pydantic import BaseModel
+from typing import Optional, List as TypingList
+
 from pdf.pdf_utils import process_page, page_to_markdown
 from jobs.jobs import process_pdf_batch, process_pdf_batch_multimodal
 from jobs.job_state import init_job, get_job
+from embedding.embedding_client import EmbeddingClient
+from vector_store.milvus_store import MilvusVectorStore
+from qa.retriever import Retriever
+from qa.generator import create_generator, get_default_generator
+from qa.qa_service import QAService
+
+
+# Q&A Request Models
+class QuestionRequest(BaseModel):
+    question: str
+    top_k: int = 5
+    temperature: float = 0.7
+    include_sources: bool = True
+    llm_provider: Optional[str] = None  # ollama, openai, anthropic, gemini
+    llm_model: Optional[str] = None
+
+
+class SummaryRequest(BaseModel):
+    summary_type: str = "brief"  # brief, detailed, bullets
+    max_chunks: int = 20
+    temperature: float = 0.7
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+
+
+class ChatMessage(BaseModel):
+    role: str  # user or assistant
+    content: str
+
+
+class ChatRequest(BaseModel):
+    messages: TypingList[ChatMessage]
+    top_k: int = 5
+    temperature: float = 0.7
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+
+
+# Configuration
+EMBEDDING_SERVICE_URL = "http://localhost:8000"
+MILVUS_HOST = "localhost"
+MILVUS_PORT = 19530
 
 app = FastAPI(
     title="PDF Analysis API",
@@ -221,6 +266,202 @@ def get_batch_summary(batch_id: str):
         summary = json.load(f)
 
     return JSONResponse(summary)
+
+
+# =============================================================================
+# Q&A Endpoints
+# =============================================================================
+
+def _get_qa_service(llm_provider: Optional[str] = None, llm_model: Optional[str] = None) -> QAService:
+    """Helper to create QA service with specified or default LLM."""
+    embedder = EmbeddingClient(EMBEDDING_SERVICE_URL)
+    vector_store = MilvusVectorStore(host=MILVUS_HOST, port=MILVUS_PORT)
+    retriever = Retriever(vector_store, embedder)
+
+    if llm_provider:
+        generator = create_generator(provider=llm_provider, model=llm_model)
+    else:
+        generator = get_default_generator()
+
+    return QAService(retriever, generator)
+
+
+@app.post("/api/v2/qa/ask/{batch_id}", tags=["Q&A"])
+def ask_question(batch_id: str, request: QuestionRequest):
+    """
+    Ask a question about the ingested PDFs.
+
+    The system will:
+    1. Search for relevant chunks in Milvus using semantic similarity
+    2. Pass the retrieved context to an LLM
+    3. Generate an answer with citations [Source: PDF_NAME, Page X]
+
+    LLM Providers:
+    - ollama: Local inference (default, requires Ollama running)
+    - openai: OpenAI API (requires OPENAI_API_KEY)
+    - anthropic: Anthropic API (requires ANTHROPIC_API_KEY)
+    - gemini: Google Gemini API (requires GOOGLE_API_KEY)
+    """
+    # Verify batch exists
+    job = get_job(batch_id)
+    if not job:
+        return JSONResponse({"error": "Batch not found"}, status_code=404)
+
+    if job.get("state") != "completed":
+        return JSONResponse({
+            "error": "Batch processing not complete",
+            "status": job.get("state")
+        }, status_code=400)
+
+    try:
+        qa_service = _get_qa_service(request.llm_provider, request.llm_model)
+        result = qa_service.ask(
+            session_id=batch_id,
+            question=request.question,
+            top_k=request.top_k,
+            temperature=request.temperature,
+            include_sources=request.include_sources
+        )
+        return JSONResponse({
+            "batch_id": batch_id,
+            "question": request.question,
+            **result
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/v2/qa/summarize/{batch_id}", tags=["Q&A"])
+def summarize_documents(batch_id: str, request: SummaryRequest):
+    """
+    Generate a summary of the ingested PDFs.
+
+    Summary Types:
+    - brief: 2-3 paragraph overview
+    - detailed: Comprehensive coverage of all topics
+    - bullets: Key points as bullet list
+    """
+    job = get_job(batch_id)
+    if not job:
+        return JSONResponse({"error": "Batch not found"}, status_code=404)
+
+    if job.get("state") != "completed":
+        return JSONResponse({
+            "error": "Batch processing not complete",
+            "status": job.get("state")
+        }, status_code=400)
+
+    try:
+        qa_service = _get_qa_service(request.llm_provider, request.llm_model)
+        result = qa_service.summarize(
+            session_id=batch_id,
+            summary_type=request.summary_type,
+            max_chunks=request.max_chunks,
+            temperature=request.temperature
+        )
+        return JSONResponse({
+            "batch_id": batch_id,
+            **result
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/v2/qa/chat/{batch_id}", tags=["Q&A"])
+def chat_with_documents(batch_id: str, request: ChatRequest):
+    """
+    Multi-turn conversation with the ingested PDFs.
+
+    Send conversation history as messages array:
+    [
+        {"role": "user", "content": "What is this document about?"},
+        {"role": "assistant", "content": "This document discusses..."},
+        {"role": "user", "content": "Tell me more about section 2"}
+    ]
+    """
+    job = get_job(batch_id)
+    if not job:
+        return JSONResponse({"error": "Batch not found"}, status_code=404)
+
+    if job.get("state") != "completed":
+        return JSONResponse({
+            "error": "Batch processing not complete",
+            "status": job.get("state")
+        }, status_code=400)
+
+    try:
+        qa_service = _get_qa_service(request.llm_provider, request.llm_model)
+        messages = [{"role": m.role, "content": m.content} for m in request.messages]
+        result = qa_service.chat(
+            session_id=batch_id,
+            messages=messages,
+            top_k=request.top_k,
+            temperature=request.temperature
+        )
+        return JSONResponse({
+            "batch_id": batch_id,
+            **result
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/v2/qa/search/{batch_id}", tags=["Q&A"])
+def search_chunks(
+    batch_id: str,
+    query: str = Query(..., description="Search query"),
+    top_k: int = Query(5, description="Number of results"),
+    content_type: str = Query(None, description="Filter by content type")
+):
+    """
+    Search for relevant chunks without LLM generation.
+
+    Useful for:
+    - Finding specific content in documents
+    - Debugging retrieval quality
+    - Building custom Q&A flows
+    """
+    job = get_job(batch_id)
+    if not job:
+        return JSONResponse({"error": "Batch not found"}, status_code=404)
+
+    if job.get("state") != "completed":
+        return JSONResponse({
+            "error": "Batch processing not complete",
+            "status": job.get("state")
+        }, status_code=400)
+
+    try:
+        embedder = EmbeddingClient(EMBEDDING_SERVICE_URL)
+        vector_store = MilvusVectorStore(host=MILVUS_HOST, port=MILVUS_PORT)
+        retriever = Retriever(vector_store, embedder)
+
+        chunks = retriever.search(
+            session_id=batch_id,
+            query=query,
+            top_k=top_k,
+            content_type_filter=content_type
+        )
+
+        return JSONResponse({
+            "batch_id": batch_id,
+            "query": query,
+            "total_results": len(chunks),
+            "results": [
+                {
+                    "pdf_name": c["pdf_name"],
+                    "page_no": c["page_no"] + 1,
+                    "content_type": c["content_type"],
+                    "text": c["text"],
+                    "score": round(c["score"], 4),
+                    "image_link": c.get("image_link", ""),
+                    "table_link": c.get("table_link", "")
+                }
+                for c in chunks
+            ]
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/health")
