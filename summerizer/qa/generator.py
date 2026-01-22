@@ -25,13 +25,16 @@ class LLMGenerator(ABC):
 class OllamaGenerator(LLMGenerator):
     """Generator using Ollama for local LLM inference."""
 
+    # Default model: gemma3:4b (good balance of quality and speed)
+    DEFAULT_MODEL = "gemma3:4b"
+
     def __init__(
         self,
-        model: str = "llama3",
+        model: str = None,
         base_url: str = "http://localhost:11434",
-        timeout: int = 120
+        timeout: int = 180  # Increased for gemma3
     ):
-        self.model = model
+        self.model = model or self.DEFAULT_MODEL
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
@@ -235,7 +238,7 @@ def create_generator(
 
     if provider == "ollama":
         return OllamaGenerator(
-            model=model or "llama3",
+            model=model or os.environ.get("OLLAMA_MODEL", "gemma3:4b"),
             base_url=base_url or os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
         )
 
