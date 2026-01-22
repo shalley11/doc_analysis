@@ -7,6 +7,40 @@ creates semantic chunks, indexes them into Milvus for similarity search,
 and provides Q&A capabilities with LLM-generated answers and citations.
 
 ================================================================================
+QUICK START
+================================================================================
+
+1. Install dependencies:
+   pip install -r requirement.txt
+
+2. Start required services:
+   redis-server                                    # Job queue
+   docker-compose up -d milvus                     # Vector DB
+   ollama pull gemma3:4b && ollama serve           # LLM for Q&A
+
+3. Start the application:
+   # Terminal 1: Embedding service
+   uvicorn embedding.embedding_service:app --port 8000
+
+   # Terminal 2: Background worker
+   rq worker pdf-processing
+
+   # Terminal 3: Main API
+   uvicorn main:app --port 8080
+
+4. Upload a PDF:
+   curl -X POST http://localhost:8080/api/v2/pdf/analyze \
+     -F "files=@document.pdf" -F "use_vision=no"
+
+5. Check status (wait for "completed"):
+   curl http://localhost:8080/api/v1/pdf/status/{batch_id}
+
+6. Ask questions:
+   curl -X POST http://localhost:8080/api/v2/qa/ask/{batch_id} \
+     -H "Content-Type: application/json" \
+     -d '{"question": "What is this document about?"}'
+
+================================================================================
 PROJECT STRUCTURE
 ================================================================================
 
@@ -47,7 +81,8 @@ summerizer/
 │   └── documentation.txt
 │
 └── tests/                  # Test files
-    └── test_semantic_chunking.py
+    ├── test_semantic_chunking.py
+    └── test_qa_module.py
 
 ================================================================================
 REQUIREMENTS
@@ -56,6 +91,7 @@ REQUIREMENTS
 External Services:
 - Redis (localhost:6379) - Job queue and state management
 - Milvus (localhost:19530) - Vector database for similarity search
+- Ollama (localhost:11434) - Local LLM inference for Q&A (with gemma3:4b)
 
 Python Dependencies (requirement.txt):
 - fastapi, uvicorn - Web framework
@@ -88,7 +124,12 @@ RUNNING THE SERVICES
    cd summerizer
    rq worker pdf-processing
 
-5. Start Main API:
+5. Start Ollama with gemma3:4b (for Q&A):
+   ollama pull gemma3:4b
+   ollama serve
+   # Model will auto-load on first request
+
+6. Start Main API:
    cd summerizer
    uvicorn main:app --host 0.0.0.0 --port 8080
 
@@ -148,7 +189,7 @@ POST /api/v2/qa/ask/{batch_id}
       "temperature": 0.7,
       "include_sources": true,
       "llm_provider": "ollama",    # optional: ollama, openai, anthropic, gemini
-      "llm_model": "llama3"        # optional: model name
+      "llm_model": "gemma3:4b"     # optional: default is gemma3:4b
     }
   Returns: answer with citations and source chunks
 
@@ -160,7 +201,7 @@ POST /api/v2/qa/summarize/{batch_id}
       "max_chunks": 20,
       "temperature": 0.7,
       "llm_provider": "ollama",
-      "llm_model": "llama3"
+      "llm_model": "gemma3:4b"
     }
   Returns: generated summary with citations
 
@@ -232,6 +273,37 @@ Environment Variables:
 Gemma 3 4B Modes:
 - local: Uses Ollama (ollama run gemma3:4b)
 - api: Uses Google AI Studio API
+
+================================================================================
+Q&A LLM CONFIGURATION
+================================================================================
+
+The Q&A module uses gemma3:4b via Ollama by default. Configure via environment
+variables or API parameters.
+
+Environment Variables:
+
+  # Ollama (default for Q&A)
+  OLLAMA_BASE_URL=http://localhost:11434
+  OLLAMA_MODEL=gemma3:4b           # Default model for Q&A
+
+  # Cloud LLM APIs (optional)
+  OPENAI_API_KEY=xxx               # For OpenAI models
+  ANTHROPIC_API_KEY=xxx            # For Claude models
+  GOOGLE_API_KEY=xxx               # For Gemini models
+
+API Parameter Override:
+  When calling Q&A endpoints, you can override the LLM:
+  {
+    "llm_provider": "openai",      # ollama, openai, anthropic, gemini
+    "llm_model": "gpt-4o-mini"     # specific model name
+  }
+
+Supported Models:
+  - ollama: gemma3:4b (default), llama3, mistral, etc.
+  - openai: gpt-4o-mini, gpt-4o, gpt-4-turbo
+  - anthropic: claude-3-haiku, claude-3-sonnet, claude-3-opus
+  - gemini: gemini-1.5-flash, gemini-1.5-pro
 
 ================================================================================
 CHUNK FORMAT
@@ -337,11 +409,17 @@ Flow:
 5. LLM generates answer with citations [Source: PDF_NAME, Page X]
 
 LLM Providers:
-- ollama: Local inference (default). Requires Ollama running with a model.
-          ollama run llama3
+- ollama: Local inference (default). Uses gemma3:4b by default.
+          Setup: ollama pull gemma3:4b && ollama serve
+          Override model: set OLLAMA_MODEL environment variable
 - openai: OpenAI API. Requires OPENAI_API_KEY environment variable.
 - anthropic: Anthropic API. Requires ANTHROPIC_API_KEY.
 - gemini: Google Gemini API. Requires GOOGLE_API_KEY.
+
+Default Model: gemma3:4b (via Ollama)
+- Good balance of quality and speed for Q&A tasks
+- Runs locally, no API costs
+- 4B parameters, requires ~3GB VRAM
 
 Citation Format:
   Answers include citations like [Source: document.pdf, Page 5] to
