@@ -9,10 +9,11 @@ class ChunkIndexer:
         self.vector_store = vector_store
         self.embedding_dim = embedding_dim
 
-    def index_chunks(self, session_id: str, chunks: List[Dict], ttl_seconds: int):
+    def index_chunks(self, session_id: str, chunks: List[Dict], ttl_seconds: int, batch_size: int = 32):
         """
         Index chunks into Milvus vector store.
         Supports both legacy chunks and new multimodal chunks.
+        Processes embeddings in batches to avoid timeouts.
         """
         if not chunks:
             print("ChunkIndexer: No chunks to index, skipping.")
@@ -25,9 +26,16 @@ class ChunkIndexer:
             ttl_seconds=ttl_seconds
         )
 
+        # Process embeddings in batches to avoid timeout
         texts = [c["text"] for c in chunks]
-        print(f"ChunkIndexer: Generating embeddings for {len(texts)} texts...")
-        embeddings = self.embedder.embed(texts)
+        print(f"ChunkIndexer: Generating embeddings for {len(texts)} texts in batches of {batch_size}...")
+
+        embeddings = []
+        for i in range(0, len(texts), batch_size):
+            batch_texts = texts[i:i + batch_size]
+            print(f"  Embedding batch {i // batch_size + 1}/{(len(texts) + batch_size - 1) // batch_size} ({len(batch_texts)} texts)...")
+            batch_embeddings = self.embedder.embed(batch_texts)
+            embeddings.extend(batch_embeddings)
 
         if not embeddings:
             raise ValueError("No embeddings returned from embedding service")
