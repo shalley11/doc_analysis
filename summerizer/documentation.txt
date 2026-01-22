@@ -1,0 +1,5 @@
+1. uvicorn embedding_service:app --host 0.0.0.0 --port 8000 --workers 1
+       Use 1 worker for GPU (avoids CUDA conflicts).
+       Can use more workers on CPU if needed.
+
+2.
