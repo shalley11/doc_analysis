@@ -28,7 +28,10 @@ QUICK START
    # Terminal 3: Main API
    uvicorn main:app --port 8080
 
-4. Upload a PDF:
+4. Open the Web UI:
+   http://localhost:8080/
+
+   Or use curl:
    curl -X POST http://localhost:8080/api/v2/pdf/analyze \
      -F "files=@document.pdf" -F "use_vision=no"
 
@@ -56,7 +59,8 @@ summerizer/
 │
 ├── jobs/                   # Background job processing
 │   ├── jobs.py             # PDF batch processing logic
-│   └── job_state.py        # Redis-based job state management
+│   ├── job_state.py        # Redis-based job state management
+│   └── processing_status.py# Granular stage tracking for UI
 │
 ├── pdf/                    # PDF extraction and vision
 │   ├── pdf_utils.py        # PDF text/image/table extraction
@@ -80,9 +84,15 @@ summerizer/
 ├── docs/                   # Documentation
 │   └── documentation.txt
 │
+├── ui/                     # Web UI for API testing
+│   ├── index.html          # Main HTML page
+│   ├── styles.css          # Styling
+│   └── app.js              # JavaScript logic
+│
 └── tests/                  # Test files
     ├── test_semantic_chunking.py
-    └── test_qa_module.py
+    ├── test_qa_module.py
+    └── test_full_flow.py   # End-to-end integration test
 
 ================================================================================
 REQUIREMENTS
@@ -225,6 +235,22 @@ GET /api/v2/qa/search/{batch_id}
     - query: Search query (required)
     - top_k: Number of results (default: 5)
     - content_type: Filter by type (optional)
+
+----- Status API (Real-time) -----
+
+GET /api/v2/status/{batch_id}
+  Full detailed status with stage breakdown.
+
+GET /api/v2/status/{batch_id}/summary
+  Lightweight status for polling.
+
+GET /api/v2/status/{batch_id}/stages
+  Timeline view for stepper UI.
+
+WebSocket /ws/status/{batch_id}
+  Real-time status updates via WebSocket.
+  Receives live updates as processing progresses.
+  No polling required - updates pushed automatically.
 
 ================================================================================
 SEMANTIC CHUNKING
@@ -393,6 +419,264 @@ Generate Summary:
 
 Search Chunks:
   curl "http://localhost:8080/api/v2/qa/search/{batch_id}?query=methodology&top_k=3"
+
+================================================================================
+STATUS API (for UI Integration)
+================================================================================
+
+The Status API provides granular, stage-by-stage processing status for building
+interactive UIs that show real-time progress.
+
+Processing Stages (in order):
+1. QUEUED        - Job is waiting in the queue
+2. INITIALIZING  - Job started, preparing resources
+3. EXTRACTING    - Extracting text, images, tables from PDF pages
+4. VISION        - Processing images/tables with vision model (if enabled)
+5. CHUNKING      - Creating semantic or fixed-size text chunks
+6. EMBEDDING     - Generating vector embeddings for chunks
+7. INDEXING      - Inserting embeddings into Milvus
+8. COMPLETED     - All processing finished successfully
+9. FAILED        - Processing encountered an error
+
+Stage Statuses:
+- pending   - Stage not yet started
+- running   - Stage currently in progress
+- completed - Stage finished successfully
+- skipped   - Stage was skipped (e.g., vision when use_vision=no)
+- failed    - Stage encountered an error
+
+----- Status Endpoints -----
+
+GET /api/v2/status/{batch_id}
+  Full detailed status with all stage information.
+  Response:
+  {
+    "batch_id": "abc-123",
+    "state": "extracting",
+    "total_pdfs": 2,
+    "processed_pdfs": 0,
+    "total_pages": 15,
+    "processed_pages": 7,
+    "total_chunks": 0,
+    "progress_percent": 46,
+    "current_stage": "extracting",
+    "current_pdf": "document1.pdf",
+    "started_at": 1706012345.123,
+    "duration_seconds": 12.5,
+    "milvus_indexed": false,
+    "error": null,
+    "pdfs": {
+      "document1.pdf": {
+        "pdf_name": "document1.pdf",
+        "total_pages": 10,
+        "processed_pages": 7,
+        "progress_percent": 70,
+        "current_stage": "extracting",
+        "stages": {
+          "initializing": {
+            "name": "initializing",
+            "status": "completed",
+            "progress": 100,
+            "duration_seconds": 0.5
+          },
+          "extracting": {
+            "name": "extracting",
+            "status": "running",
+            "progress": 70,
+            "current_item": "Page 7 of 10",
+            "message": "Extracting text and images from page 7",
+            "duration_seconds": 8.2
+          },
+          "vision": {"status": "pending", ...},
+          "chunking": {"status": "pending", ...},
+          "embedding": {"status": "pending", ...},
+          "indexing": {"status": "pending", ...}
+        }
+      }
+    }
+  }
+
+GET /api/v2/status/{batch_id}/summary
+  Lightweight status for frequent polling (every 1-2 seconds).
+  Response:
+  {
+    "batch_id": "abc-123",
+    "state": "extracting",
+    "progress_percent": 46,
+    "current_stage": "extracting",
+    "current_pdf": "document1.pdf",
+    "message": "Extracting content from document1.pdf...",
+    "error": null
+  }
+
+GET /api/v2/status/{batch_id}/stages
+  Timeline view for stepper/progress UI components.
+  Response:
+  {
+    "batch_id": "abc-123",
+    "state": "extracting",
+    "progress_percent": 46,
+    "stages": [
+      {"name": "queued", "label": "Queued", "status": "completed"},
+      {"name": "initializing", "label": "Initializing", "status": "completed"},
+      {"name": "extracting", "label": "Extracting Content", "status": "running"},
+      {"name": "vision", "label": "Vision Processing", "status": "pending"},
+      {"name": "chunking", "label": "Creating Chunks", "status": "pending"},
+      {"name": "embedding", "label": "Generating Embeddings", "status": "pending"},
+      {"name": "indexing", "label": "Indexing", "status": "pending"},
+      {"name": "completed", "label": "Completed", "status": "pending"}
+    ]
+  }
+
+----- WebSocket Real-time Updates -----
+
+For real-time updates without polling, connect via WebSocket:
+
+  WebSocket: ws://localhost:8080/ws/status/{batch_id}
+
+The WebSocket connection provides:
+1. Initial status immediately upon connection
+2. Updates whenever processing state changes
+3. Final status when processing completes or fails
+4. Automatic keepalive pings every 30 seconds
+
+Message Format:
+  {
+    "type": "status_update",
+    "batch_id": "abc-123",
+    "data": {
+      "state": "extracting",
+      "progress_percent": 45,
+      "current_stage": "extracting",
+      "current_pdf": "document.pdf",
+      "pdfs": { ... },
+      ...
+    }
+  }
+
+JavaScript Example:
+  const ws = new WebSocket(`ws://localhost:8080/ws/status/${batchId}`);
+
+  ws.onopen = () => {
+    console.log('Connected to status stream');
+  };
+
+  ws.onmessage = (event) => {
+    const update = JSON.parse(event.data);
+    if (update.type === 'status_update') {
+      updateProgressBar(update.data.progress_percent);
+      updateStageIndicator(update.data.current_stage);
+      if (update.data.state === 'completed') {
+        showCompletionMessage();
+        ws.close();
+      }
+    }
+  };
+
+  ws.onclose = () => {
+    console.log('Status stream closed');
+  };
+
+React Hook Example:
+  function useProcessingStatus(batchId) {
+    const [status, setStatus] = useState(null);
+
+    useEffect(() => {
+      const ws = new WebSocket(`ws://localhost:8080/ws/status/${batchId}`);
+      ws.onmessage = (e) => {
+        const update = JSON.parse(e.data);
+        if (update.type === 'status_update') {
+          setStatus(update.data);
+        }
+      };
+      return () => ws.close();
+    }, [batchId]);
+
+    return status;
+  }
+
+----- Backend Redis Pub/Sub -----
+
+For backend services, you can also subscribe directly to Redis:
+  Channel: status:{batch_id}
+
+Example (Python):
+  import redis
+  r = redis.Redis()
+  pubsub = r.pubsub()
+  pubsub.subscribe(f"status:{batch_id}")
+  for message in pubsub.listen():
+      if message['type'] == 'message':
+          status = json.loads(message['data'])
+          handle_update(status)
+
+----- UI Integration Examples -----
+
+Progress Bar:
+  fetch(`/api/v2/status/${batchId}/summary`)
+    .then(r => r.json())
+    .then(data => {
+      progressBar.value = data.progress_percent;
+      statusText.innerText = data.message;
+    });
+
+Stepper Component:
+  fetch(`/api/v2/status/${batchId}/stages`)
+    .then(r => r.json())
+    .then(data => {
+      data.stages.forEach((stage, i) => {
+        stepperItems[i].classList.remove('active', 'completed', 'pending');
+        if (stage.status === 'running') {
+          stepperItems[i].classList.add('active');
+        } else if (stage.status === 'completed') {
+          stepperItems[i].classList.add('completed');
+        } else {
+          stepperItems[i].classList.add('pending');
+        }
+      });
+    });
+
+Recommended Polling Interval:
+  - /summary endpoint: Every 1-2 seconds
+  - /stages endpoint: Every 2-3 seconds
+  - Full status: Every 5 seconds or on-demand
+
+================================================================================
+WEB UI
+================================================================================
+
+A simple web interface is provided for testing the API interactively.
+
+Access: http://localhost:8080/ui/ (or just http://localhost:8080/)
+
+Features:
+1. Upload Tab
+   - Drag & drop or browse for PDF files
+   - Toggle vision processing and semantic chunking
+   - View upload progress
+
+2. Status Tab
+   - Real-time processing status via WebSocket
+   - Visual timeline showing current stage
+   - Progress percentage and detailed messages
+   - Per-PDF status breakdown
+
+3. Chunks Tab
+   - View all extracted chunks
+   - Filter by content type (text, table, image)
+   - Filter by PDF name
+   - Inspect chunk content and metadata
+
+4. Q&A Tab
+   - Ask questions about processed documents
+   - Adjust top_k and temperature parameters
+   - Generate summaries (bullets, brief, detailed)
+   - View answers with source citations
+
+The UI automatically:
+- Connects to WebSocket for real-time updates
+- Persists batch ID in localStorage
+- Falls back to polling if WebSocket fails
 
 ================================================================================
 Q&A MODULE

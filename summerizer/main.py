@@ -1,11 +1,14 @@
 import uuid
+import json
+import asyncio
 from pathlib import Path
 import shutil
-from typing import List
+from typing import List, Dict, Set
 
-from fastapi import FastAPI, UploadFile, File, Query
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import FastAPI, UploadFile, File, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 import redis
 from rq import Queue
 
@@ -15,6 +18,11 @@ from typing import Optional, List as TypingList
 from pdf.pdf_utils import process_page, page_to_markdown
 from jobs.jobs import process_pdf_batch, process_pdf_batch_multimodal
 from jobs.job_state import init_job, get_job
+from jobs.processing_status import (
+    get_batch_status,
+    get_batch_status_summary,
+    init_batch_status
+)
 from embedding.embedding_client import EmbeddingClient
 from vector_store.milvus_store import MilvusVectorStore
 from qa.retriever import Retriever
@@ -40,6 +48,16 @@ class SummaryRequest(BaseModel):
     llm_model: Optional[str] = None
 
 
+class AdvancedSummaryRequest(BaseModel):
+    scope: str = "all"  # "topic", "document", "all"
+    summary_format: str = "brief"  # brief, detailed, bullets
+    num_topics: int = 5  # For topic-wise summary
+    max_chunks: int = 100
+    temperature: float = 0.7
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+
+
 class ChatMessage(BaseModel):
     role: str  # user or assistant
     content: str
@@ -58,14 +76,107 @@ EMBEDDING_SERVICE_URL = "http://localhost:8000"
 MILVUS_HOST = "localhost"
 MILVUS_PORT = 19530
 
+
+# =============================================================================
+# WebSocket Connection Manager
+# =============================================================================
+
+class ConnectionManager:
+    """Manages WebSocket connections for real-time status updates."""
+
+    def __init__(self):
+        # batch_id -> set of WebSocket connections
+        self.active_connections: Dict[str, Set[WebSocket]] = {}
+        self._redis_tasks: Dict[str, asyncio.Task] = {}
+
+    async def connect(self, websocket: WebSocket, batch_id: str):
+        """Accept connection and add to batch subscribers."""
+        await websocket.accept()
+        if batch_id not in self.active_connections:
+            self.active_connections[batch_id] = set()
+        self.active_connections[batch_id].add(websocket)
+
+        # Start Redis listener for this batch if not already running
+        if batch_id not in self._redis_tasks:
+            self._redis_tasks[batch_id] = asyncio.create_task(
+                self._redis_listener(batch_id)
+            )
+
+    def disconnect(self, websocket: WebSocket, batch_id: str):
+        """Remove connection from batch subscribers."""
+        if batch_id in self.active_connections:
+            self.active_connections[batch_id].discard(websocket)
+            # Clean up if no more connections for this batch
+            if not self.active_connections[batch_id]:
+                del self.active_connections[batch_id]
+                # Cancel Redis listener task
+                if batch_id in self._redis_tasks:
+                    self._redis_tasks[batch_id].cancel()
+                    del self._redis_tasks[batch_id]
+
+    async def broadcast(self, batch_id: str, message: dict):
+        """Send message to all connections subscribed to a batch."""
+        if batch_id not in self.active_connections:
+            return
+
+        disconnected = set()
+        for connection in self.active_connections[batch_id]:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                disconnected.add(connection)
+
+        # Clean up disconnected clients
+        for conn in disconnected:
+            self.active_connections[batch_id].discard(conn)
+
+    async def _redis_listener(self, batch_id: str):
+        """Listen to Redis pub/sub and broadcast to WebSocket clients."""
+        redis_async = redis.Redis(host="localhost", port=6379, decode_responses=True)
+        pubsub = redis_async.pubsub()
+        pubsub.subscribe(f"status:{batch_id}")
+
+        try:
+            while batch_id in self.active_connections:
+                message = pubsub.get_message(ignore_subscribe_messages=True, timeout=0.1)
+                if message and message['type'] == 'message':
+                    try:
+                        data = json.loads(message['data'])
+                        await self.broadcast(batch_id, data)
+                    except json.JSONDecodeError:
+                        pass
+                await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            pubsub.unsubscribe(f"status:{batch_id}")
+            pubsub.close()
+
+
+# Global connection manager
+ws_manager = ConnectionManager()
+
+
 app = FastAPI(
     title="PDF Analysis API",
     description="Upload PDFs for async batch processing with multimodal support",
     version="2.0.0"
 )
 
+# CORS middleware for UI
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Mount static files for serving images/tables
 app.mount("/static", StaticFiles(directory="outputs"), name="static")
+
+# Mount UI files
+app.mount("/ui", StaticFiles(directory="ui", html=True), name="ui")
 
 redis_conn = redis.Redis(host="localhost", port=6379)
 queue = Queue("pdf-processing", connection=redis_conn)
@@ -128,6 +239,256 @@ def job_status(batch_id: str):
         "milvus_indexed": job["milvus_indexed"],
         "pdfs": job["pdfs"]
     }
+
+
+# =============================================================================
+# Detailed Status API (for UI)
+# =============================================================================
+
+@app.get("/api/v2/status/{batch_id}", tags=["Status - Detailed"])
+def get_detailed_status(batch_id: str):
+    """
+    Get detailed processing status with stage-by-stage breakdown.
+
+    Returns comprehensive status including:
+    - Overall batch progress
+    - Current processing stage
+    - Per-PDF status with individual stage progress
+    - Timing information (duration, started_at, completed_at)
+    - Error details if any stage failed
+
+    Ideal for building interactive progress UIs.
+    """
+    status = get_batch_status(batch_id)
+    if not status:
+        # Fallback to basic job status
+        job = get_job(batch_id)
+        if not job:
+            return JSONResponse({"error": "Batch not found"}, status_code=404)
+        return JSONResponse({
+            "batch_id": batch_id,
+            "state": job.get("state", "unknown"),
+            "progress_percent": job.get("progress", 0),
+            "message": "Detailed status not available"
+        })
+
+    return JSONResponse(status)
+
+
+@app.get("/api/v2/status/{batch_id}/summary", tags=["Status - Detailed"])
+def get_status_summary(batch_id: str):
+    """
+    Get simplified status summary for polling.
+
+    Returns minimal status info optimized for frequent polling:
+    - state: Current state (queued, extracting, chunking, indexing, completed, failed)
+    - progress_percent: Overall progress (0-100)
+    - current_stage: Current processing stage
+    - current_pdf: PDF currently being processed
+    - message: Human-readable status message
+
+    Use this for lightweight status checks. Use /api/v2/status/{batch_id}
+    for full details when user expands the status view.
+    """
+    summary = get_batch_status_summary(batch_id)
+    if not summary:
+        job = get_job(batch_id)
+        if not job:
+            return JSONResponse({"error": "Batch not found"}, status_code=404)
+        return JSONResponse({
+            "batch_id": batch_id,
+            "state": job.get("state", "unknown"),
+            "progress_percent": job.get("progress", 0),
+            "message": f"Processing... {job.get('processed_pages', 0)}/{job.get('total_pages', 0)} pages"
+        })
+
+    return JSONResponse(summary)
+
+
+@app.get("/api/v2/status/{batch_id}/stages", tags=["Status - Detailed"])
+def get_stage_timeline(batch_id: str):
+    """
+    Get processing stages timeline for visualization.
+
+    Returns ordered list of stages with their status and timing,
+    perfect for rendering a progress timeline or stepper UI.
+
+    Stage order: initializing -> extracting -> vision -> chunking -> indexing -> completed
+    """
+    status = get_batch_status(batch_id)
+    if not status:
+        return JSONResponse({"error": "Batch not found"}, status_code=404)
+
+    # Define stage order for timeline
+    stage_order = [
+        ("initializing", "Initializing", "Setting up processing environment"),
+        ("extracting", "Extracting", "Extracting text, images, and tables from PDF"),
+        ("vision", "Vision Processing", "Analyzing images and tables with AI"),
+        ("chunking", "Chunking", "Creating semantic text chunks"),
+        ("indexing", "Indexing", "Storing in vector database for search")
+    ]
+
+    timeline = []
+    for stage_key, stage_name, stage_description in stage_order:
+        stage_info = {
+            "key": stage_key,
+            "name": stage_name,
+            "description": stage_description,
+            "status": "pending",
+            "progress": 0
+        }
+
+        # Aggregate status from all PDFs
+        all_statuses = []
+        for pdf_name, pdf_data in status.get("pdfs", {}).items():
+            stages = pdf_data.get("stages", {})
+            if stage_key in stages:
+                all_statuses.append(stages[stage_key])
+
+        if all_statuses:
+            # Determine overall stage status
+            statuses = [s.get("status") for s in all_statuses]
+            if all(s == "completed" for s in statuses):
+                stage_info["status"] = "completed"
+                stage_info["progress"] = 100
+            elif any(s == "running" for s in statuses):
+                stage_info["status"] = "running"
+                stage_info["progress"] = sum(s.get("progress", 0) for s in all_statuses) // len(all_statuses)
+            elif any(s == "failed" for s in statuses):
+                stage_info["status"] = "failed"
+            elif any(s == "completed" for s in statuses):
+                stage_info["status"] = "partial"
+                stage_info["progress"] = sum(s.get("progress", 0) for s in all_statuses) // len(all_statuses)
+
+            # Get timing from first PDF (representative)
+            first_stage = all_statuses[0]
+            if first_stage.get("started_at"):
+                stage_info["started_at"] = first_stage["started_at"]
+            if first_stage.get("completed_at"):
+                stage_info["completed_at"] = first_stage["completed_at"]
+            if first_stage.get("duration_seconds"):
+                stage_info["duration_seconds"] = first_stage["duration_seconds"]
+            if first_stage.get("message"):
+                stage_info["message"] = first_stage["message"]
+
+        timeline.append(stage_info)
+
+    # Add final completed/failed stage
+    final_stage = {
+        "key": "completed",
+        "name": "Completed",
+        "description": "Processing finished, ready for Q&A",
+        "status": "pending" if status.get("state") != "completed" else "completed",
+        "progress": 100 if status.get("state") == "completed" else 0
+    }
+    if status.get("state") == "failed":
+        final_stage["key"] = "failed"
+        final_stage["name"] = "Failed"
+        final_stage["status"] = "failed"
+        final_stage["error"] = status.get("error")
+
+    timeline.append(final_stage)
+
+    return JSONResponse({
+        "batch_id": batch_id,
+        "current_stage": status.get("current_stage"),
+        "overall_progress": status.get("progress_percent", 0),
+        "timeline": timeline
+    })
+
+
+# =============================================================================
+# WebSocket for Real-time Status Updates
+# =============================================================================
+
+@app.websocket("/ws/status/{batch_id}")
+async def websocket_status(websocket: WebSocket, batch_id: str):
+    """
+    WebSocket endpoint for real-time status updates.
+
+    Connect to receive live updates as processing progresses:
+    - ws://localhost:8080/ws/status/{batch_id}
+
+    Messages are JSON objects with structure:
+    {
+        "type": "status_update",
+        "batch_id": "abc-123",
+        "data": {
+            "state": "extracting",
+            "progress_percent": 45,
+            "current_stage": "extracting",
+            "current_pdf": "document.pdf",
+            ...
+        }
+    }
+
+    The connection will send:
+    1. Initial status immediately upon connection
+    2. Updates whenever processing state changes
+    3. Final status when processing completes or fails
+
+    Client Example (JavaScript):
+        const ws = new WebSocket(`ws://localhost:8080/ws/status/${batchId}`);
+        ws.onmessage = (event) => {
+            const update = JSON.parse(event.data);
+            updateUI(update.data);
+        };
+    """
+    await ws_manager.connect(websocket, batch_id)
+
+    try:
+        # Send initial status immediately
+        status = get_batch_status(batch_id)
+        if status:
+            await websocket.send_json({
+                "type": "status_update",
+                "batch_id": batch_id,
+                "data": status
+            })
+        else:
+            # Fallback to basic job status
+            job = get_job(batch_id)
+            if job:
+                await websocket.send_json({
+                    "type": "status_update",
+                    "batch_id": batch_id,
+                    "data": {
+                        "state": job.get("state", "unknown"),
+                        "progress_percent": job.get("progress", 0)
+                    }
+                })
+            else:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Batch not found"
+                })
+                await websocket.close()
+                return
+
+        # Keep connection alive and wait for client messages or disconnect
+        while True:
+            try:
+                # Wait for ping/pong or client messages
+                data = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=30.0
+                )
+                # Handle client messages (e.g., ping)
+                if data == "ping":
+                    await websocket.send_text("pong")
+            except asyncio.TimeoutError:
+                # Send keepalive ping
+                try:
+                    await websocket.send_json({"type": "ping"})
+                except Exception:
+                    break
+
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        ws_manager.disconnect(websocket, batch_id)
 
 
 @app.post("/api/v2/pdf/analyze", tags=["PDFs - Multimodal"])
@@ -198,6 +559,10 @@ def analyze_pdfs_multimodal(
     )
     init_job(batch_id, rq_job_id=job.id)
 
+    # Initialize detailed status tracking
+    pdf_names = [Path(f.filename).stem for f in files]
+    init_batch_status(batch_id, pdf_names)
+
     return JSONResponse({
         "batch_id": batch_id,
         "rq_job_id": job.id,
@@ -207,7 +572,11 @@ def analyze_pdfs_multimodal(
         "vision_enabled": use_vision.lower() == "yes",
         "semantic_chunking_enabled": semantic_enabled,
         "preview_markdown": previews if preview_only.lower() == "yes" else None,
-        "static_base_url": f"/static/{batch_id}"
+        "static_base_url": f"/static/{batch_id}",
+        "status_url": f"/api/v2/status/{batch_id}",
+        "status_summary_url": f"/api/v2/status/{batch_id}/summary",
+        "status_timeline_url": f"/api/v2/status/{batch_id}/stages",
+        "websocket_url": f"/ws/status/{batch_id}"
     })
 
 
@@ -367,6 +736,64 @@ def summarize_documents(batch_id: str, request: SummaryRequest):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.post("/api/v2/qa/summarize-advanced/{batch_id}", tags=["Q&A - Advanced"])
+def advanced_summarize(batch_id: str, request: AdvancedSummaryRequest):
+    """
+    Generate summaries with different scopes and strategies.
+
+    **Summary Scopes:**
+
+    1. **topic** - Section/Topic-wise Summary
+       - Clusters chunks by semantic similarity
+       - Identifies distinct topics automatically
+       - Generates summary for each topic with title
+       - Best for: Understanding document structure
+
+    2. **document** - Per-Document Summary
+       - Generates separate summary for each PDF
+       - Uses Map-Reduce strategy for full coverage
+       - Best for: Comparing multiple documents
+
+    3. **all** - Combined Summary
+       - Single summary covering all documents
+       - Hierarchical Map-Reduce strategy
+       - Best for: Overall understanding of content
+
+    **Summary Formats:**
+    - brief: Concise 2-3 paragraphs
+    - detailed: Comprehensive coverage
+    - bullets: Organized bullet points
+    """
+    job = get_job(batch_id)
+    if not job:
+        return JSONResponse({"error": "Batch not found"}, status_code=404)
+
+    if job.get("state") != "completed":
+        return JSONResponse({
+            "error": "Batch processing not complete",
+            "status": job.get("state")
+        }, status_code=400)
+
+    try:
+        qa_service = _get_qa_service(request.llm_provider, request.llm_model)
+        result = qa_service.advanced_summarize(
+            session_id=batch_id,
+            scope=request.scope,
+            summary_format=request.summary_format,
+            num_topics=request.num_topics,
+            max_chunks=request.max_chunks,
+            temperature=request.temperature
+        )
+        return JSONResponse({
+            "batch_id": batch_id,
+            **result
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.post("/api/v2/qa/chat/{batch_id}", tags=["Q&A"])
 def chat_with_documents(batch_id: str, request: ChatRequest):
     """
@@ -467,3 +894,10 @@ def search_chunks(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/", tags=["UI"])
+def root():
+    """Redirect to UI."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/ui/index.html")

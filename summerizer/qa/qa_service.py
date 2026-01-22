@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional
 from qa.retriever import Retriever
 from qa.generator import LLMGenerator, get_default_generator, create_generator
 from qa.prompts import build_qa_prompt, build_summary_prompt
+from qa.summarizer import Summarizer, SummaryScope
 
 
 class QAService:
@@ -24,6 +25,7 @@ class QAService:
     ):
         self.retriever = retriever
         self.generator = generator or get_default_generator()
+        self.summarizer = Summarizer(self.generator)
 
     def ask(
         self,
@@ -132,6 +134,69 @@ class QAService:
             "summary_type": summary_type,
             "chunks_used": len(chunks)
         }
+
+    def advanced_summarize(
+        self,
+        session_id: str,
+        scope: str = "all",
+        summary_format: str = "brief",
+        num_topics: int = 5,
+        max_chunks: int = 100,
+        temperature: float = 0.7
+    ) -> Dict[str, Any]:
+        """
+        Generate summaries with different scopes.
+
+        Args:
+            session_id: Batch/session ID
+            scope: "topic" (section-wise), "document" (per-PDF), "all" (combined)
+            summary_format: "brief", "detailed", or "bullets"
+            num_topics: Number of topics for topic-wise summary
+            max_chunks: Maximum chunks to process
+            temperature: LLM temperature
+
+        Returns:
+            Dict with summaries based on scope
+        """
+        # Get all chunks
+        chunks = self.retriever.get_all_chunks(session_id, limit=max_chunks)
+
+        if not chunks:
+            return {
+                "scope": scope,
+                "error": "No content found in the documents.",
+                "chunks_used": 0
+            }
+
+        if scope == SummaryScope.TOPIC or scope == "topic":
+            # Need embeddings for clustering
+            embeddings = self._get_chunk_embeddings(chunks)
+            result = self.summarizer.summarize_by_topic(
+                chunks=chunks,
+                embeddings=embeddings,
+                num_topics=num_topics,
+                summary_format=summary_format,
+                temperature=temperature
+            )
+        elif scope == SummaryScope.DOCUMENT or scope == "document":
+            result = self.summarizer.summarize_by_document(
+                chunks=chunks,
+                summary_format=summary_format,
+                temperature=temperature
+            )
+        else:  # "all"
+            result = self.summarizer.summarize_all(
+                chunks=chunks,
+                summary_format=summary_format,
+                temperature=temperature
+            )
+
+        return result
+
+    def _get_chunk_embeddings(self, chunks: List[Dict[str, Any]]) -> List[List[float]]:
+        """Get embeddings for chunks (for clustering)."""
+        texts = [c.get("text", "") for c in chunks]
+        return self.retriever.embedder.embed(texts)
 
     def chat(
         self,

@@ -21,6 +21,21 @@ from jobs.job_state import (
     init_pdf,
     update_pdf
 )
+from jobs.processing_status import (
+    ProcessingStage,
+    StageStatus,
+    init_batch_status,
+    start_batch,
+    set_batch_totals,
+    start_pdf,
+    update_stage,
+    update_extraction_progress,
+    update_chunking_progress,
+    complete_pdf,
+    complete_batch,
+    fail_batch,
+    fail_pdf
+)
 
 SESSION_TTL_SECONDS = 3600
 EMBEDDING_DIM = 1024
@@ -218,7 +233,17 @@ def process_pdf_batch_multimodal(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
+    # Get list of PDFs for status initialization
+    pdf_files = list(input_path.glob("*.pdf"))
+    pdf_names = [f.stem for f in pdf_files]
+
+    # Initialize detailed status tracking
+    init_batch_status(batch_id, pdf_names)
+    start_batch(batch_id)
+
     # Initialize embedding client
+    update_stage(batch_id, "", ProcessingStage.INITIALIZING, StageStatus.RUNNING,
+                 message="Connecting to services...")
     embedder = EmbeddingClient(EMBEDDING_SERVICE_URL)
 
     # Initialize Milvus vector store
@@ -228,6 +253,7 @@ def process_pdf_batch_multimodal(
     except Exception as e:
         print(f"ERROR: Failed to connect to Milvus: {e}")
         update_job(batch_id, state="failed", error=f"Milvus connection failed: {str(e)}")
+        fail_batch(batch_id, f"Milvus connection failed: {str(e)}")
         raise
 
     indexer = ChunkIndexer(embedder, vector_store, EMBEDDING_DIM)
@@ -248,24 +274,26 @@ def process_pdf_batch_multimodal(
 
     # Count total pages
     total_pages = 0
-    for pdf_file in input_path.glob("*.pdf"):
+    for pdf_file in pdf_files:
         doc = fitz.open(pdf_file)
         total_pages += doc.page_count
         doc.close()
 
     update_job(batch_id, state="running", total_pages=total_pages)
+    set_batch_totals(batch_id, total_pages)
 
     processed_pages_global = 0
     total_chunks = 0
     all_batch_results = []
 
-    for pdf_file in input_path.glob("*.pdf"):
+    for pdf_file in pdf_files:
         pdf_name = pdf_file.stem
         pdf_out_dir = output_path / pdf_name
         pdf_out_dir.mkdir(parents=True, exist_ok=True)
 
         doc = fitz.open(pdf_file)
         init_pdf(batch_id, pdf_name, doc.page_count)
+        start_pdf(batch_id, pdf_name, doc.page_count)
 
         pages_result = []
         all_chunks = []
@@ -274,6 +302,10 @@ def process_pdf_batch_multimodal(
 
         print(f"Processing {pdf_name} ({doc.page_count} pages)...")
 
+        # Stage: Extraction
+        update_stage(batch_id, pdf_name, ProcessingStage.EXTRACTING, StageStatus.RUNNING,
+                     message=f"Extracting content from {pdf_name}")
+
         for i, page in enumerate(doc):
             # Use new multimodal extraction
             page_result = process_page_with_positions(
@@ -281,9 +313,17 @@ def process_pdf_batch_multimodal(
             )
             pages_result.append(page_result)
 
+            # Update extraction progress
+            update_extraction_progress(batch_id, pdf_name, i, doc.page_count)
+
             # Process blocks with vision model
             blocks = page_result.get("blocks", [])
             if vision_processor and blocks:
+                # Stage: Vision processing
+                update_stage(batch_id, pdf_name, ProcessingStage.VISION_PROCESSING, StageStatus.RUNNING,
+                             progress=int((i + 1) / doc.page_count * 100),
+                             current_item=f"Page {i+1} of {doc.page_count}",
+                             message=f"Processing {len(blocks)} blocks with vision model")
                 print(f"  Page {i+1}: Processing {len(blocks)} blocks with vision model...")
                 blocks = vision_processor.process_blocks(blocks)
                 page_result["blocks"] = blocks
@@ -324,6 +364,18 @@ def process_pdf_batch_multimodal(
 
         doc.close()
 
+        # Mark extraction complete
+        update_stage(batch_id, pdf_name, ProcessingStage.EXTRACTING, StageStatus.COMPLETED,
+                     progress=100, message=f"Extracted {len(pages_result)} pages")
+
+        if vision_processor:
+            update_stage(batch_id, pdf_name, ProcessingStage.VISION_PROCESSING, StageStatus.COMPLETED,
+                         progress=100, message="Vision processing complete")
+
+        # Stage: Chunking
+        update_stage(batch_id, pdf_name, ProcessingStage.CHUNKING, StageStatus.RUNNING,
+                     message="Creating text chunks...")
+
         # Save results
         with open(pdf_out_dir / "result.json", "w", encoding="utf-8") as f:
             json.dump(pages_result, f, ensure_ascii=False, indent=2)
@@ -340,12 +392,21 @@ def process_pdf_batch_multimodal(
         total_chunks += len(all_chunks)
         update_pdf(batch_id, pdf_name, chunk_count=len(all_chunks))
         update_job(batch_id, chunk_count=total_chunks)
+        update_chunking_progress(batch_id, pdf_name, len(all_chunks))
 
-        # Index chunks
+        update_stage(batch_id, pdf_name, ProcessingStage.CHUNKING, StageStatus.COMPLETED,
+                     progress=100, message=f"Created {len(all_chunks)} chunks")
+
+        # Stage: Indexing
         if not all_chunks:
             print(f"WARNING: No chunks generated for {pdf_name}. Skipping indexing.")
+            update_stage(batch_id, pdf_name, ProcessingStage.INDEXING, StageStatus.SKIPPED,
+                         message="No chunks to index")
         else:
             try:
+                update_stage(batch_id, pdf_name, ProcessingStage.INDEXING, StageStatus.RUNNING,
+                             message=f"Indexing {len(all_chunks)} chunks into Milvus...")
+
                 print(f"Indexing {len(all_chunks)} multimodal chunks for {pdf_name}...")
                 indexer.index_multimodal_chunks(
                     session_id=batch_id,
@@ -353,13 +414,21 @@ def process_pdf_batch_multimodal(
                     ttl_seconds=SESSION_TTL_SECONDS
                 )
                 print(f"Successfully indexed {len(all_chunks)} chunks for {pdf_name}")
+
+                update_stage(batch_id, pdf_name, ProcessingStage.INDEXING, StageStatus.COMPLETED,
+                             progress=100, message=f"Indexed {len(all_chunks)} chunks")
+
             except Exception as e:
                 print(f"ERROR: Failed to index chunks for {pdf_name}: {e}")
                 print(traceback.format_exc())
                 update_pdf(batch_id, pdf_name, status="failed", error=f"Indexing failed: {str(e)}")
+                update_stage(batch_id, pdf_name, ProcessingStage.INDEXING, StageStatus.FAILED,
+                             error=str(e))
+                fail_pdf(batch_id, pdf_name, str(e))
                 continue
 
         update_pdf(batch_id, pdf_name, status="completed", progress=100)
+        complete_pdf(batch_id, pdf_name, len(all_chunks))
 
         # Add to batch results
         all_batch_results.append({
@@ -387,6 +456,9 @@ def process_pdf_batch_multimodal(
         progress=100,
         milvus_indexed=True
     )
+
+    # Mark batch as completed
+    complete_batch(batch_id)
 
     print(f"MULTIMODAL JOB COMPLETED: {batch_id}")
     print(f"  Total PDFs: {len(all_batch_results)}")
