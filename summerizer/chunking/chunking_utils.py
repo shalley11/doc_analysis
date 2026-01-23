@@ -51,11 +51,105 @@ TABLE_FIGURE_PATTERNS = [
 
 
 class ContentType(Enum):
-    TEXT = "text"
-    LIST = "list"
-    TABLE = "table"
-    FIGURE = "figure"
-    HEADING = "heading"
+    PARAGRAPH = "paragraph"      # Regular text paragraphs (max 500 words)
+    LIST = "list"                # Bullet/numbered lists as separate chunks
+    TABLE = "table"              # Table summary as separate chunk
+    FIGURE = "figure"            # Image/figure summary as separate chunk
+    TABLE_OF_CONTENTS = "toc"    # Table of contents as separate chunk
+    HEADING = "heading"          # Section headings
+    TEXT = "text"                # Generic text (for backward compatibility)
+
+
+# =============================================================================
+# Page Number and Artifact Removal
+# =============================================================================
+
+# Patterns for page numbers and artifacts to remove
+PAGE_NUMBER_PATTERNS = [
+    r'^\s*\d+\s*$',                          # Standalone page numbers: "5", " 12 "
+    r'^\s*[-–—]\s*\d+\s*[-–—]\s*$',          # Dash-surrounded: "- 5 -", "– 12 –"
+    r'^\s*Page\s+\d+\s*$',                   # "Page 5"
+    r'^\s*Page\s+\d+\s+of\s+\d+\s*$',        # "Page 5 of 10"
+    r'^\s*\d+\s*/\s*\d+\s*$',                # "5/10"
+    r'^\s*p\.\s*\d+\s*$',                    # "p. 5"
+    r'^\s*\[\d+\]\s*$',                      # "[5]"
+]
+
+# Patterns for Table of Contents detection
+TOC_PATTERNS = [
+    r'^Table\s+of\s+Contents?\s*$',
+    r'^Contents?\s*$',
+    r'^INDEX\s*$',
+    r'^CONTENTS\s*$',
+]
+
+# Pattern for TOC entries (title followed by page number)
+TOC_ENTRY_PATTERN = r'^(.+?)\s+\.{2,}\s*\d+\s*$|^(.+?)\s{2,}\d+\s*$'
+
+
+def is_page_number(text: str) -> bool:
+    """Check if text is a page number or page artifact."""
+    text = text.strip()
+    if not text:
+        return False
+
+    for pattern in PAGE_NUMBER_PATTERNS:
+        if re.match(pattern, text, re.IGNORECASE):
+            return True
+
+    # Also check for single digits or small numbers at line boundaries
+    if re.match(r'^\d{1,3}$', text) and int(text) < 1000:
+        return True
+
+    return False
+
+
+def remove_page_numbers(text: str) -> str:
+    """Remove page numbers and artifacts from text."""
+    if not text:
+        return ""
+
+    lines = text.split('\n')
+    cleaned_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Skip page numbers
+        if is_page_number(stripped):
+            continue
+
+        # Skip empty lines that might be artifacts
+        if not stripped:
+            # Keep one empty line for paragraph separation
+            if cleaned_lines and cleaned_lines[-1].strip():
+                cleaned_lines.append('')
+            continue
+
+        cleaned_lines.append(line)
+
+    return '\n'.join(cleaned_lines)
+
+
+def is_table_of_contents_header(text: str) -> bool:
+    """Check if text is a Table of Contents header."""
+    text = text.strip()
+    for pattern in TOC_PATTERNS:
+        if re.match(pattern, text, re.IGNORECASE):
+            return True
+    return False
+
+
+def is_toc_entry(text: str) -> bool:
+    """Check if text looks like a TOC entry (title ... page_number)."""
+    text = text.strip()
+    # Check for dotted leaders or multiple spaces followed by number
+    if re.match(TOC_ENTRY_PATTERN, text):
+        return True
+    # Check for section-like entries with page numbers
+    if re.match(r'^[IVX\d]+\.\s+.+\s+\d+\s*$', text):
+        return True
+    return False
 
 
 @dataclass
@@ -892,6 +986,1371 @@ def merge_small_chunks_final(
         chunk["chunk_number"] = i
 
     return merged
+
+
+# =============================================================================
+# NEW CHUNKING STRATEGY - User Requirements
+# =============================================================================
+# Strategy:
+# - Paragraph chunks (max 500 words, min 50 words)
+# - Table summary as separate chunk
+# - Image summary as separate chunk
+# - List as separate chunk
+# - Table of Contents as separate chunk
+# - Remove page numbers
+# - Keep cross-page references
+# =============================================================================
+
+def extract_table_of_contents(text: str) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """
+    Extract Table of Contents from text as a separate block.
+
+    Returns:
+        (remaining_text, toc_block or None)
+    """
+    if not text:
+        return "", None
+
+    lines = text.split('\n')
+    toc_block = None
+    toc_lines = []
+    in_toc = False
+    toc_start_idx = -1
+    toc_end_idx = -1
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Check for TOC header
+        if is_table_of_contents_header(stripped):
+            in_toc = True
+            toc_start_idx = i
+            toc_lines.append(stripped)
+            continue
+
+        if in_toc:
+            # Check if this looks like a TOC entry
+            if is_toc_entry(stripped) or not stripped:
+                toc_lines.append(stripped)
+                toc_end_idx = i
+            elif stripped and not is_toc_entry(stripped):
+                # Check if next few lines are TOC entries (might be a section header in TOC)
+                is_still_toc = False
+                for j in range(i, min(i + 3, len(lines))):
+                    if is_toc_entry(lines[j].strip()):
+                        is_still_toc = True
+                        break
+
+                if is_still_toc:
+                    toc_lines.append(stripped)
+                    toc_end_idx = i
+                else:
+                    # End of TOC
+                    break
+
+    if toc_lines and len(toc_lines) > 2:  # At least header + 2 entries
+        toc_text = '\n'.join(toc_lines)
+        toc_block = {
+            "type": "toc",
+            "content": toc_text,
+            "position": 0,
+            "metadata": {
+                "is_table_of_contents": True,
+                "entry_count": len([l for l in toc_lines if l.strip() and not is_table_of_contents_header(l)])
+            }
+        }
+
+        # Remove TOC from original text
+        remaining_lines = lines[:toc_start_idx] + lines[toc_end_idx + 1:]
+        return '\n'.join(remaining_lines), toc_block
+
+    return text, None
+
+
+def chunk_paragraph(
+    text: str,
+    pdf_name: str,
+    page_no: int,
+    position: float,
+    chunk_number: int,
+    max_words: int = 500,
+    min_words: int = 50,
+    heading: str = None
+) -> List[Dict[str, Any]]:
+    """
+    Chunk text into paragraph chunks (max 500 words each).
+
+    If heading is provided, it will be prepended to each chunk to maintain context.
+    Paragraphs are split at sentence boundaries to respect max_words.
+    """
+    sentences = sentence_split(text)
+    chunks = []
+
+    if not sentences:
+        return chunks
+
+    # Calculate heading words (will be added to each chunk)
+    heading_words = len(heading.split()) if heading else 0
+    effective_max = max_words - heading_words  # Reserve space for heading
+
+    current_sentences = []
+    current_word_count = 0
+    sub_position = 0
+    total_parts = 0
+
+    # First pass: count how many parts we'll create
+    temp_sentences = []
+    temp_word_count = 0
+    for sentence in sentences:
+        word_count = len(sentence.split())
+        if temp_word_count + word_count > effective_max and temp_sentences:
+            total_parts += 1
+            temp_sentences = []
+            temp_word_count = 0
+        temp_sentences.append(sentence)
+        temp_word_count += word_count
+    if temp_sentences:
+        total_parts += 1
+
+    # Second pass: create chunks
+    part_num = 1
+    for sentence in sentences:
+        word_count = len(sentence.split())
+
+        # If adding this sentence exceeds max, save current chunk
+        if current_word_count + word_count > effective_max and current_sentences:
+            chunk_text = ' '.join(current_sentences)
+            # Prepend heading if provided
+            if heading:
+                chunk_text = f"{heading}\n\n{chunk_text}"
+
+            chunks.append({
+                "chunk_id": deterministic_chunk_id(pdf_name, page_no, chunk_text, "paragraph"),
+                "content_type": "paragraph",
+                "text": chunk_text,
+                "pdf_name": pdf_name,
+                "page_no": page_no,
+                "position": position + (sub_position * 0.001),
+                "chunk_number": chunk_number + len(chunks),
+                "image_link": "",
+                "table_link": "",
+                "context_before_id": "",
+                "context_after_id": "",
+                "metadata": {
+                    "chunking_method": "paragraph",
+                    "word_count": current_word_count + heading_words,
+                    "sentence_count": len(current_sentences),
+                    "heading": heading if heading else None,
+                    "part": part_num,
+                    "total_parts": total_parts,
+                    "is_split": total_parts > 1
+                }
+            })
+            part_num += 1
+            sub_position += 1
+            current_sentences = []
+            current_word_count = 0
+
+        current_sentences.append(sentence)
+        current_word_count += word_count
+
+    # Save final chunk
+    if current_sentences:
+        chunk_text = ' '.join(current_sentences)
+        # Prepend heading if provided
+        if heading:
+            chunk_text = f"{heading}\n\n{chunk_text}"
+
+        chunks.append({
+            "chunk_id": deterministic_chunk_id(pdf_name, page_no, chunk_text, "paragraph"),
+            "content_type": "paragraph",
+            "text": chunk_text,
+            "pdf_name": pdf_name,
+            "page_no": page_no,
+            "position": position + (sub_position * 0.001),
+            "chunk_number": chunk_number + len(chunks),
+            "image_link": "",
+            "table_link": "",
+            "context_before_id": "",
+            "context_after_id": "",
+            "metadata": {
+                "chunking_method": "paragraph",
+                "word_count": current_word_count + heading_words,
+                "sentence_count": len(current_sentences),
+                "heading": heading if heading else None,
+                "part": part_num,
+                "total_parts": total_parts,
+                "is_split": total_parts > 1
+            }
+        })
+
+    return chunks
+
+
+def chunk_table_with_structure(
+    content: str,
+    pdf_name: str,
+    page_no: int,
+    position: float,
+    chunk_number: int,
+    max_words: int = 500,
+    table_link: str = "",
+    caption: str = ""
+) -> List[Dict[str, Any]]:
+    """
+    Chunk table content while preserving table link and header in all split chunks.
+
+    If table > 500 words, split but keep caption/header and table_link in each chunk.
+    """
+    total_words = len(content.split())
+
+    # Extract header (first line or caption)
+    lines = content.strip().split('\n')
+    header = caption if caption else (lines[0] if lines else "")
+    header_words = len(header.split())
+
+    # If fits in one chunk
+    if total_words <= max_words:
+        return [{
+            "chunk_id": deterministic_chunk_id(pdf_name, page_no, content, "table"),
+            "content_type": "table",
+            "text": content,
+            "pdf_name": pdf_name,
+            "page_no": page_no,
+            "position": position,
+            "chunk_number": chunk_number,
+            "image_link": "",
+            "table_link": table_link,
+            "context_before_id": "",
+            "context_after_id": "",
+            "metadata": {
+                "chunking_method": "table_summary",
+                "caption": caption,
+                "is_table": True,
+                "is_split": False,
+                "part": 1,
+                "total_parts": 1
+            }
+        }]
+
+    # Split table while preserving header
+    chunks = []
+    effective_max = max_words - header_words - 5  # Reserve space for header + "[continued]"
+
+    # Split content into rows
+    rows = lines[1:] if caption else lines  # Skip caption if separate
+    current_rows = []
+    current_word_count = 0
+    part_num = 1
+
+    # First pass: count total parts
+    temp_rows = []
+    temp_count = 0
+    total_parts = 0
+    for row in rows:
+        row_words = len(row.split())
+        if temp_count + row_words > effective_max and temp_rows:
+            total_parts += 1
+            temp_rows = []
+            temp_count = 0
+        temp_rows.append(row)
+        temp_count += row_words
+    if temp_rows:
+        total_parts += 1
+
+    # Second pass: create chunks
+    for row in rows:
+        row_words = len(row.split())
+
+        if current_word_count + row_words > effective_max and current_rows:
+            # Create chunk with header
+            chunk_content = '\n'.join(current_rows)
+            if part_num > 1:
+                chunk_text = f"{header} [Part {part_num}/{total_parts}]\n{chunk_content}"
+            else:
+                chunk_text = f"{header}\n{chunk_content}"
+
+            chunks.append({
+                "chunk_id": deterministic_chunk_id(pdf_name, page_no, chunk_text, "table"),
+                "content_type": "table",
+                "text": chunk_text,
+                "pdf_name": pdf_name,
+                "page_no": page_no,
+                "position": position + ((part_num - 1) * 0.001),
+                "chunk_number": chunk_number + len(chunks),
+                "image_link": "",
+                "table_link": table_link,
+                "context_before_id": "",
+                "context_after_id": "",
+                "metadata": {
+                    "chunking_method": "table_summary",
+                    "caption": caption,
+                    "is_table": True,
+                    "is_split": True,
+                    "part": part_num,
+                    "total_parts": total_parts,
+                    "original_header": header
+                }
+            })
+            part_num += 1
+            current_rows = []
+            current_word_count = 0
+
+        current_rows.append(row)
+        current_word_count += row_words
+
+    # Final chunk
+    if current_rows:
+        chunk_content = '\n'.join(current_rows)
+        if total_parts > 1:
+            chunk_text = f"{header} [Part {part_num}/{total_parts}]\n{chunk_content}"
+        else:
+            chunk_text = f"{header}\n{chunk_content}" if header not in chunk_content else chunk_content
+
+        chunks.append({
+            "chunk_id": deterministic_chunk_id(pdf_name, page_no, chunk_text, "table"),
+            "content_type": "table",
+            "text": chunk_text,
+            "pdf_name": pdf_name,
+            "page_no": page_no,
+            "position": position + ((part_num - 1) * 0.001),
+            "chunk_number": chunk_number + len(chunks),
+            "image_link": "",
+            "table_link": table_link,
+            "context_before_id": "",
+            "context_after_id": "",
+            "metadata": {
+                "chunking_method": "table_summary",
+                "caption": caption,
+                "is_table": True,
+                "is_split": total_parts > 1,
+                "part": part_num,
+                "total_parts": total_parts,
+                "original_header": header
+            }
+        })
+
+    return chunks
+
+
+def chunk_figure_with_structure(
+    content: str,
+    pdf_name: str,
+    page_no: int,
+    position: float,
+    chunk_number: int,
+    max_words: int = 500,
+    image_link: str = "",
+    caption: str = ""
+) -> List[Dict[str, Any]]:
+    """
+    Chunk figure/image content while preserving image link and caption in all split chunks.
+
+    If figure description > 500 words, split but keep caption and image_link in each chunk.
+    """
+    total_words = len(content.split())
+
+    # Extract caption (usually first line)
+    lines = content.strip().split('\n')
+    header = caption if caption else (lines[0] if lines else "")
+    header_words = len(header.split())
+
+    # If fits in one chunk
+    if total_words <= max_words:
+        return [{
+            "chunk_id": deterministic_chunk_id(pdf_name, page_no, content, "figure"),
+            "content_type": "figure",
+            "text": content,
+            "pdf_name": pdf_name,
+            "page_no": page_no,
+            "position": position,
+            "chunk_number": chunk_number,
+            "image_link": image_link,
+            "table_link": "",
+            "context_before_id": "",
+            "context_after_id": "",
+            "metadata": {
+                "chunking_method": "image_summary",
+                "caption": caption,
+                "is_figure": True,
+                "is_split": False,
+                "part": 1,
+                "total_parts": 1
+            }
+        }]
+
+    # Split figure description while preserving caption
+    chunks = []
+    sentences = sentence_split(content)
+    effective_max = max_words - header_words - 5
+
+    current_sentences = []
+    current_word_count = 0
+    part_num = 1
+
+    # Count total parts
+    temp_sentences = []
+    temp_count = 0
+    total_parts = 0
+    for sentence in sentences:
+        s_words = len(sentence.split())
+        if temp_count + s_words > effective_max and temp_sentences:
+            total_parts += 1
+            temp_sentences = []
+            temp_count = 0
+        temp_sentences.append(sentence)
+        temp_count += s_words
+    if temp_sentences:
+        total_parts += 1
+
+    # Create chunks
+    for sentence in sentences:
+        s_words = len(sentence.split())
+
+        if current_word_count + s_words > effective_max and current_sentences:
+            chunk_content = ' '.join(current_sentences)
+            if part_num > 1:
+                chunk_text = f"{header} [Part {part_num}/{total_parts}]\n{chunk_content}"
+            else:
+                chunk_text = f"{header}\n{chunk_content}" if header not in chunk_content else chunk_content
+
+            chunks.append({
+                "chunk_id": deterministic_chunk_id(pdf_name, page_no, chunk_text, "figure"),
+                "content_type": "figure",
+                "text": chunk_text,
+                "pdf_name": pdf_name,
+                "page_no": page_no,
+                "position": position + ((part_num - 1) * 0.001),
+                "chunk_number": chunk_number + len(chunks),
+                "image_link": image_link,
+                "table_link": "",
+                "context_before_id": "",
+                "context_after_id": "",
+                "metadata": {
+                    "chunking_method": "image_summary",
+                    "caption": caption,
+                    "is_figure": True,
+                    "is_split": True,
+                    "part": part_num,
+                    "total_parts": total_parts,
+                    "original_caption": header
+                }
+            })
+            part_num += 1
+            current_sentences = []
+            current_word_count = 0
+
+        current_sentences.append(sentence)
+        current_word_count += s_words
+
+    # Final chunk
+    if current_sentences:
+        chunk_content = ' '.join(current_sentences)
+        if total_parts > 1:
+            chunk_text = f"{header} [Part {part_num}/{total_parts}]\n{chunk_content}"
+        else:
+            chunk_text = content
+
+        chunks.append({
+            "chunk_id": deterministic_chunk_id(pdf_name, page_no, chunk_text, "figure"),
+            "content_type": "figure",
+            "text": chunk_text,
+            "pdf_name": pdf_name,
+            "page_no": page_no,
+            "position": position + ((part_num - 1) * 0.001),
+            "chunk_number": chunk_number + len(chunks),
+            "image_link": image_link,
+            "table_link": "",
+            "context_before_id": "",
+            "context_after_id": "",
+            "metadata": {
+                "chunking_method": "image_summary",
+                "caption": caption,
+                "is_figure": True,
+                "is_split": total_parts > 1,
+                "part": part_num,
+                "total_parts": total_parts,
+                "original_caption": header
+            }
+        })
+
+    return chunks
+
+
+def chunk_toc_with_structure(
+    content: str,
+    pdf_name: str,
+    page_no: int,
+    chunk_number: int,
+    max_words: int = 500
+) -> List[Dict[str, Any]]:
+    """
+    Chunk Table of Contents while preserving header in all split chunks.
+
+    If TOC > 500 words, split but keep "Table of Contents" header in each chunk.
+    """
+    lines = content.strip().split('\n')
+    total_words = len(content.split())
+
+    # Find TOC header
+    header = "Table of Contents"
+    for line in lines[:3]:
+        if is_table_of_contents_header(line.strip()):
+            header = line.strip()
+            break
+
+    header_words = len(header.split())
+
+    # If fits in one chunk
+    if total_words <= max_words:
+        return [{
+            "chunk_id": deterministic_chunk_id(pdf_name, page_no, content, "toc"),
+            "content_type": "toc",
+            "text": content,
+            "pdf_name": pdf_name,
+            "page_no": page_no,
+            "position": 0,
+            "chunk_number": chunk_number,
+            "image_link": "",
+            "table_link": "",
+            "context_before_id": "",
+            "context_after_id": "",
+            "metadata": {
+                "chunking_method": "toc_separate",
+                "is_table_of_contents": True,
+                "is_split": False,
+                "part": 1,
+                "total_parts": 1
+            }
+        }]
+
+    # Split TOC while preserving header
+    chunks = []
+    effective_max = max_words - header_words - 5
+    entries = [l for l in lines if l.strip() and not is_table_of_contents_header(l.strip())]
+
+    current_entries = []
+    current_word_count = 0
+    part_num = 1
+
+    # Count total parts
+    total_parts = 0
+    temp_entries = []
+    temp_count = 0
+    for entry in entries:
+        e_words = len(entry.split())
+        if temp_count + e_words > effective_max and temp_entries:
+            total_parts += 1
+            temp_entries = []
+            temp_count = 0
+        temp_entries.append(entry)
+        temp_count += e_words
+    if temp_entries:
+        total_parts += 1
+
+    # Create chunks
+    for entry in entries:
+        e_words = len(entry.split())
+
+        if current_word_count + e_words > effective_max and current_entries:
+            chunk_content = '\n'.join(current_entries)
+            chunk_text = f"{header} [Part {part_num}/{total_parts}]\n{chunk_content}"
+
+            chunks.append({
+                "chunk_id": deterministic_chunk_id(pdf_name, page_no, chunk_text, "toc"),
+                "content_type": "toc",
+                "text": chunk_text,
+                "pdf_name": pdf_name,
+                "page_no": page_no,
+                "position": (part_num - 1) * 0.001,
+                "chunk_number": chunk_number + len(chunks),
+                "image_link": "",
+                "table_link": "",
+                "context_before_id": "",
+                "context_after_id": "",
+                "metadata": {
+                    "chunking_method": "toc_separate",
+                    "is_table_of_contents": True,
+                    "is_split": True,
+                    "part": part_num,
+                    "total_parts": total_parts,
+                    "original_header": header
+                }
+            })
+            part_num += 1
+            current_entries = []
+            current_word_count = 0
+
+        current_entries.append(entry)
+        current_word_count += e_words
+
+    # Final chunk
+    if current_entries:
+        chunk_content = '\n'.join(current_entries)
+        if total_parts > 1:
+            chunk_text = f"{header} [Part {part_num}/{total_parts}]\n{chunk_content}"
+        else:
+            chunk_text = content
+
+        chunks.append({
+            "chunk_id": deterministic_chunk_id(pdf_name, page_no, chunk_text, "toc"),
+            "content_type": "toc",
+            "text": chunk_text,
+            "pdf_name": pdf_name,
+            "page_no": page_no,
+            "position": (part_num - 1) * 0.001,
+            "chunk_number": chunk_number + len(chunks),
+            "image_link": "",
+            "table_link": "",
+            "context_before_id": "",
+            "context_after_id": "",
+            "metadata": {
+                "chunking_method": "toc_separate",
+                "is_table_of_contents": True,
+                "is_split": total_parts > 1,
+                "part": part_num,
+                "total_parts": total_parts,
+                "original_header": header
+            }
+        })
+
+    return chunks
+
+
+def chunk_list_with_heading(
+    list_text: str,
+    pdf_name: str,
+    page_no: int,
+    position: float,
+    chunk_number: int,
+    max_words: int = 500,
+    heading: str = None
+) -> List[Dict[str, Any]]:
+    """
+    Chunk list while preserving heading in all split chunks.
+
+    If list has a heading and > 500 words, keep heading in each split chunk.
+    """
+    lines = list_text.strip().split('\n')
+    items = [l for l in lines if l.strip()]
+    total_words = len(list_text.split())
+
+    # Calculate effective max (reserve space for heading)
+    heading_words = len(heading.split()) if heading else 0
+    effective_max = max_words - heading_words - 2
+
+    # If fits in one chunk
+    if total_words + heading_words <= max_words:
+        full_text = f"{heading}\n{list_text}" if heading else list_text
+        return [{
+            "chunk_id": deterministic_chunk_id(pdf_name, page_no, full_text, "list"),
+            "content_type": "list",
+            "text": full_text,
+            "pdf_name": pdf_name,
+            "page_no": page_no,
+            "position": position,
+            "chunk_number": chunk_number,
+            "image_link": "",
+            "table_link": "",
+            "context_before_id": "",
+            "context_after_id": "",
+            "metadata": {
+                "chunking_method": "list_with_heading",
+                "item_count": len(items),
+                "heading": heading,
+                "is_complete_list": True,
+                "is_split": False,
+                "part": 1,
+                "total_parts": 1
+            }
+        }]
+
+    # Split list while preserving heading
+    chunks = []
+    current_items = []
+    current_word_count = 0
+    part_num = 1
+
+    # Count total parts
+    total_parts = 0
+    temp_items = []
+    temp_count = 0
+    for item in items:
+        i_words = len(item.split())
+        if temp_count + i_words > effective_max and temp_items:
+            total_parts += 1
+            temp_items = []
+            temp_count = 0
+        temp_items.append(item)
+        temp_count += i_words
+    if temp_items:
+        total_parts += 1
+
+    # Create chunks
+    for item in items:
+        i_words = len(item.split())
+
+        if current_word_count + i_words > effective_max and current_items:
+            chunk_content = '\n'.join(current_items)
+            if heading:
+                if total_parts > 1:
+                    chunk_text = f"{heading} [Part {part_num}/{total_parts}]\n{chunk_content}"
+                else:
+                    chunk_text = f"{heading}\n{chunk_content}"
+            else:
+                chunk_text = chunk_content
+
+            chunks.append({
+                "chunk_id": deterministic_chunk_id(pdf_name, page_no, chunk_text, "list"),
+                "content_type": "list",
+                "text": chunk_text,
+                "pdf_name": pdf_name,
+                "page_no": page_no,
+                "position": position + ((part_num - 1) * 0.001),
+                "chunk_number": chunk_number + len(chunks),
+                "image_link": "",
+                "table_link": "",
+                "context_before_id": "",
+                "context_after_id": "",
+                "metadata": {
+                    "chunking_method": "list_with_heading",
+                    "item_count": len(current_items),
+                    "heading": heading,
+                    "is_complete_list": False,
+                    "is_split": True,
+                    "part": part_num,
+                    "total_parts": total_parts
+                }
+            })
+            part_num += 1
+            current_items = []
+            current_word_count = 0
+
+        current_items.append(item)
+        current_word_count += i_words
+
+    # Final chunk
+    if current_items:
+        chunk_content = '\n'.join(current_items)
+        if heading:
+            if total_parts > 1:
+                chunk_text = f"{heading} [Part {part_num}/{total_parts}]\n{chunk_content}"
+            else:
+                chunk_text = f"{heading}\n{chunk_content}"
+        else:
+            chunk_text = chunk_content
+
+        chunks.append({
+            "chunk_id": deterministic_chunk_id(pdf_name, page_no, chunk_text, "list"),
+            "content_type": "list",
+            "text": chunk_text,
+            "pdf_name": pdf_name,
+            "page_no": page_no,
+            "position": position + ((part_num - 1) * 0.001),
+            "chunk_number": chunk_number + len(chunks),
+            "image_link": "",
+            "table_link": "",
+            "context_before_id": "",
+            "context_after_id": "",
+            "metadata": {
+                "chunking_method": "list_with_heading",
+                "item_count": len(current_items),
+                "heading": heading,
+                "is_complete_list": False,
+                "is_split": total_parts > 1,
+                "part": part_num,
+                "total_parts": total_parts
+            }
+        })
+
+    return chunks
+
+
+def chunk_list_separate(
+    list_text: str,
+    pdf_name: str,
+    page_no: int,
+    position: float,
+    chunk_number: int,
+    max_words: int = 500
+) -> List[Dict[str, Any]]:
+    """
+    Create list as a separate chunk.
+    If list exceeds max_words, split at item boundaries.
+    Wrapper for backward compatibility - calls chunk_list_with_heading.
+    """
+    return chunk_list_with_heading(
+        list_text, pdf_name, page_no, position, chunk_number, max_words, heading=None
+    )
+
+
+def chunk_heading_with_subpoints(
+    heading: str,
+    subpoints: List[str],
+    pdf_name: str,
+    page_no: int,
+    position: float,
+    chunk_number: int,
+    max_words: int = 500
+) -> List[Dict[str, Any]]:
+    """
+    Chunk content with heading and subpoints.
+
+    If total > 500 words, split subpoints but keep heading common in all chunks.
+    """
+    all_content = heading + '\n' + '\n'.join(subpoints)
+    total_words = len(all_content.split())
+    heading_words = len(heading.split())
+
+    # If fits in one chunk
+    if total_words <= max_words:
+        return [{
+            "chunk_id": deterministic_chunk_id(pdf_name, page_no, all_content, "paragraph"),
+            "content_type": "paragraph",
+            "text": all_content,
+            "pdf_name": pdf_name,
+            "page_no": page_no,
+            "position": position,
+            "chunk_number": chunk_number,
+            "image_link": "",
+            "table_link": "",
+            "context_before_id": "",
+            "context_after_id": "",
+            "metadata": {
+                "chunking_method": "heading_with_subpoints",
+                "heading": heading,
+                "subpoint_count": len(subpoints),
+                "is_split": False,
+                "part": 1,
+                "total_parts": 1
+            }
+        }]
+
+    # Split subpoints while keeping heading
+    chunks = []
+    effective_max = max_words - heading_words - 5
+    current_subpoints = []
+    current_word_count = 0
+    part_num = 1
+
+    # Count total parts
+    total_parts = 0
+    temp_sp = []
+    temp_count = 0
+    for sp in subpoints:
+        sp_words = len(sp.split())
+        if temp_count + sp_words > effective_max and temp_sp:
+            total_parts += 1
+            temp_sp = []
+            temp_count = 0
+        temp_sp.append(sp)
+        temp_count += sp_words
+    if temp_sp:
+        total_parts += 1
+
+    # Create chunks
+    for subpoint in subpoints:
+        sp_words = len(subpoint.split())
+
+        if current_word_count + sp_words > effective_max and current_subpoints:
+            chunk_content = '\n'.join(current_subpoints)
+            chunk_text = f"{heading} [Part {part_num}/{total_parts}]\n{chunk_content}"
+
+            chunks.append({
+                "chunk_id": deterministic_chunk_id(pdf_name, page_no, chunk_text, "paragraph"),
+                "content_type": "paragraph",
+                "text": chunk_text,
+                "pdf_name": pdf_name,
+                "page_no": page_no,
+                "position": position + ((part_num - 1) * 0.001),
+                "chunk_number": chunk_number + len(chunks),
+                "image_link": "",
+                "table_link": "",
+                "context_before_id": "",
+                "context_after_id": "",
+                "metadata": {
+                    "chunking_method": "heading_with_subpoints",
+                    "heading": heading,
+                    "subpoint_count": len(current_subpoints),
+                    "is_split": True,
+                    "part": part_num,
+                    "total_parts": total_parts
+                }
+            })
+            part_num += 1
+            current_subpoints = []
+            current_word_count = 0
+
+        current_subpoints.append(subpoint)
+        current_word_count += sp_words
+
+    # Final chunk
+    if current_subpoints:
+        chunk_content = '\n'.join(current_subpoints)
+        if total_parts > 1:
+            chunk_text = f"{heading} [Part {part_num}/{total_parts}]\n{chunk_content}"
+        else:
+            chunk_text = all_content
+
+        chunks.append({
+            "chunk_id": deterministic_chunk_id(pdf_name, page_no, chunk_text, "paragraph"),
+            "content_type": "paragraph",
+            "text": chunk_text,
+            "pdf_name": pdf_name,
+            "page_no": page_no,
+            "position": position + ((part_num - 1) * 0.001),
+            "chunk_number": chunk_number + len(chunks),
+            "image_link": "",
+            "table_link": "",
+            "context_before_id": "",
+            "context_after_id": "",
+            "metadata": {
+                "chunking_method": "heading_with_subpoints",
+                "heading": heading,
+                "subpoint_count": len(current_subpoints),
+                "is_split": total_parts > 1,
+                "part": part_num,
+                "total_parts": total_parts
+            }
+        })
+
+    return chunks
+
+
+# Legacy function - kept for backward compatibility
+def _chunk_list_separate_legacy(
+    list_text: str,
+    pdf_name: str,
+    page_no: int,
+    position: float,
+    chunk_number: int,
+    max_words: int = 500
+) -> List[Dict[str, Any]]:
+    """Legacy list chunking - use chunk_list_with_heading instead."""
+    lines = list_text.strip().split('\n')
+    items = [l for l in lines if l.strip()]
+
+    total_words = len(list_text.split())
+
+    # If fits in one chunk, keep together
+    if total_words <= max_words:
+        return [{
+            "chunk_id": deterministic_chunk_id(pdf_name, page_no, list_text, "list"),
+            "content_type": "list",
+            "text": list_text,
+            "pdf_name": pdf_name,
+            "page_no": page_no,
+            "position": position,
+            "chunk_number": chunk_number,
+            "image_link": "",
+            "table_link": "",
+            "context_before_id": "",
+            "context_after_id": "",
+            "metadata": {
+                "chunking_method": "list_separate",
+                "item_count": len(items),
+                "is_complete_list": True
+            }
+        }]
+
+    # Split large list
+    chunks = []
+    current_items = []
+    current_word_count = 0
+    sub_position = 0
+
+    for item in items:
+        item_words = len(item.split())
+
+        if current_word_count + item_words > max_words and current_items:
+            chunk_text = '\n'.join(current_items)
+            chunks.append({
+                "chunk_id": deterministic_chunk_id(pdf_name, page_no, chunk_text, "list"),
+                "content_type": "list",
+                "text": chunk_text,
+                "pdf_name": pdf_name,
+                "page_no": page_no,
+                "position": position + (sub_position * 0.001),
+                "chunk_number": chunk_number + len(chunks),
+                "image_link": "",
+                "table_link": "",
+                "context_before_id": "",
+                "context_after_id": "",
+                "metadata": {
+                    "chunking_method": "list_separate",
+                    "item_count": len(current_items),
+                    "is_complete_list": False,
+                    "list_part": sub_position + 1
+                }
+            })
+            sub_position += 1
+            current_items = []
+            current_word_count = 0
+
+        current_items.append(item)
+        current_word_count += item_words
+
+    # Final chunk
+    if current_items:
+        chunk_text = '\n'.join(current_items)
+        chunks.append({
+            "chunk_id": deterministic_chunk_id(pdf_name, page_no, chunk_text, "list"),
+            "content_type": "list",
+            "text": chunk_text,
+            "pdf_name": pdf_name,
+            "page_no": page_no,
+            "position": position + (sub_position * 0.001),
+            "chunk_number": chunk_number + len(chunks),
+            "image_link": "",
+            "table_link": "",
+            "context_before_id": "",
+            "context_after_id": "",
+            "metadata": {
+                "chunking_method": "list_separate",
+                "item_count": len(current_items),
+                "is_complete_list": False,
+                "list_part": sub_position + 1
+            }
+        })
+
+    return chunks
+
+
+def chunk_toc_separate(
+    toc_block: Dict[str, Any],
+    pdf_name: str,
+    page_no: int,
+    chunk_number: int
+) -> Dict[str, Any]:
+    """Create Table of Contents as a separate chunk."""
+    content = toc_block.get("content", "")
+
+    return {
+        "chunk_id": deterministic_chunk_id(pdf_name, page_no, content, "toc"),
+        "content_type": "toc",
+        "text": content,
+        "pdf_name": pdf_name,
+        "page_no": page_no,
+        "position": 0,
+        "chunk_number": chunk_number,
+        "image_link": "",
+        "table_link": "",
+        "context_before_id": "",
+        "context_after_id": "",
+        "metadata": {
+            "chunking_method": "toc_separate",
+            "is_table_of_contents": True,
+            **toc_block.get("metadata", {})
+        }
+    }
+
+
+def detect_heading_for_content(text: str) -> Tuple[Optional[str], str]:
+    """
+    Detect if text starts with a heading and return (heading, remaining_text).
+
+    Headings are detected as:
+    - Lines that are short (< 100 chars) and end without period
+    - Lines matching heading patterns (Roman numerals, numbers, etc.)
+    - All-caps short lines
+    """
+    if not text:
+        return None, ""
+
+    lines = text.strip().split('\n')
+    if not lines:
+        return None, ""
+
+    first_line = lines[0].strip()
+
+    # Check if first line looks like a heading
+    is_heading_line = False
+
+    # Short line without period at end
+    if len(first_line) < 100 and first_line and first_line[-1] not in '.!?':
+        # Check if it's a heading pattern
+        if is_heading(first_line):
+            is_heading_line = True
+        # All caps short line
+        elif first_line.isupper() and len(first_line.split()) <= 10:
+            is_heading_line = True
+        # Title case short line
+        elif first_line.istitle() and len(first_line.split()) <= 8:
+            is_heading_line = True
+        # Ends with colon
+        elif first_line.endswith(':'):
+            is_heading_line = True
+
+    if is_heading_line:
+        remaining = '\n'.join(lines[1:]).strip()
+        return first_line, remaining
+
+    return None, text
+
+
+def extract_heading_with_subpoints(text: str) -> Tuple[Optional[str], List[str], str]:
+    """
+    Extract heading with its subpoints (list items or numbered points).
+
+    Returns:
+        (heading, subpoints, remaining_text)
+    """
+    if not text:
+        return None, [], ""
+
+    lines = text.strip().split('\n')
+    heading = None
+    subpoints = []
+    remaining_start = 0
+
+    # Find heading
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Check if this is a heading
+        if is_heading(stripped) or (len(stripped) < 100 and stripped[-1] not in '.!?' if stripped else False):
+            heading = stripped
+            remaining_start = i + 1
+            break
+
+    if not heading:
+        return None, [], text
+
+    # Collect subpoints (list items following the heading)
+    for i in range(remaining_start, len(lines)):
+        stripped = lines[i].strip()
+        if not stripped:
+            continue
+
+        if is_list_item(stripped):
+            subpoints.append(stripped)
+        elif is_heading(stripped):
+            # New heading - stop collecting
+            remaining_start = i
+            break
+        else:
+            # Regular text - stop collecting subpoints
+            remaining_start = i
+            break
+    else:
+        remaining_start = len(lines)
+
+    remaining = '\n'.join(lines[remaining_start:]).strip()
+    return heading, subpoints, remaining
+
+
+def process_document_with_strategy(
+    pages: List[Dict[str, Any]],
+    pdf_name: str,
+    max_words: int = 500,
+    min_words: int = 50
+) -> List[Dict[str, Any]]:
+    """
+    Process document with the new chunking strategy.
+
+    Strategy:
+    - Paragraph chunks (max 500 words, min 50 words)
+    - Table summary as separate chunk (with header preserved in splits)
+    - Image summary as separate chunk (with caption preserved in splits)
+    - List as separate chunk (with heading preserved in splits)
+    - Table of Contents as separate chunk (with header preserved in splits)
+    - Remove page numbers (don't keep)
+    - Keep cross-page references
+    - Preserve PDF structure by keeping headers/links in all split chunks
+
+    Args:
+        pages: List of page dictionaries with 'text', 'page_no', 'blocks', etc.
+        pdf_name: Name of the PDF document
+        max_words: Maximum words per chunk (default 500)
+        min_words: Minimum words per chunk (default 50)
+
+    Returns:
+        List of chunk dictionaries ready for embedding and indexing
+    """
+    # Step 1: Cross-page merging
+    pages = merge_cross_page_content(pages)
+    pages = merge_split_lists(pages)
+
+    all_chunks = []
+    chunk_number = 0
+    toc_extracted = False
+    current_heading = None  # Track current section heading
+
+    for page in pages:
+        page_no = page.get("page_no", page.get("metadata", {}).get("page_no", 0))
+        text = page.get("text", "")
+        blocks = page.get("blocks", [])
+
+        # Step 2: Remove page numbers from text
+        if text:
+            text = remove_page_numbers(text)
+
+        # Step 3: Extract Table of Contents (only once, usually on early pages)
+        if not toc_extracted and text:
+            text, toc_block = extract_table_of_contents(text)
+            if toc_block:
+                # Use structure-preserving TOC chunking
+                toc_content = toc_block.get("content", "")
+                toc_chunks = chunk_toc_with_structure(
+                    toc_content, pdf_name, page_no, chunk_number, max_words
+                )
+                all_chunks.extend(toc_chunks)
+                chunk_number += len(toc_chunks)
+                toc_extracted = True
+
+        # Step 4: Extract tables and figures
+        remaining_text = text
+        table_figure_blocks = []
+        if text:
+            remaining_text, table_figure_blocks = extract_tables_and_figures(text)
+
+        # Step 5: Process content with heading awareness
+        position = 0
+
+        # First, try to extract heading+subpoints patterns
+        while remaining_text and remaining_text.strip():
+            # Check for heading with subpoints
+            heading, subpoints, after_subpoints = extract_heading_with_subpoints(remaining_text)
+
+            if heading and subpoints:
+                # Use chunk_heading_with_subpoints for this pattern
+                heading_chunks = chunk_heading_with_subpoints(
+                    heading, subpoints, pdf_name, page_no, position, chunk_number, max_words
+                )
+                all_chunks.extend(heading_chunks)
+                chunk_number += len(heading_chunks)
+                position += 1
+                current_heading = heading  # Update current heading
+                remaining_text = after_subpoints
+                continue
+
+            # Check for heading followed by content
+            detected_heading, content_after_heading = detect_heading_for_content(remaining_text)
+            if detected_heading:
+                current_heading = detected_heading
+                remaining_text = content_after_heading
+
+            # Extract lists from remaining text
+            content_blocks = extract_lists_from_text(remaining_text) if remaining_text else []
+
+            if not content_blocks:
+                break
+
+            # Process each content block
+            for block in content_blocks:
+                block_type = block.get("type", "text")
+                content = block.get("content", "").strip()
+
+                if not content:
+                    continue
+
+                # Remove page numbers from block content
+                content = remove_page_numbers(content)
+                if not content.strip():
+                    continue
+
+                if block_type == "list":
+                    # List with heading preserved in splits
+                    list_chunks = chunk_list_with_heading(
+                        content, pdf_name, page_no, position, chunk_number,
+                        max_words, heading=current_heading
+                    )
+                    all_chunks.extend(list_chunks)
+                    chunk_number += len(list_chunks)
+                else:
+                    # Paragraph chunk with heading context
+                    para_chunks = chunk_paragraph(
+                        content, pdf_name, page_no, position, chunk_number,
+                        max_words, min_words, heading=current_heading
+                    )
+                    all_chunks.extend(para_chunks)
+                    chunk_number += len(para_chunks)
+
+                position += 1
+
+            # We've processed all content blocks, exit the while loop
+            break
+
+        # Step 6: Add table/figure chunks with structure-preserving splits
+        for tf_block in table_figure_blocks:
+            tf_type = tf_block.get("type", "table")
+            content = tf_block.get("content", "")
+            caption = tf_block.get("caption", "")
+
+            # Remove page numbers from table/figure content
+            content = remove_page_numbers(content)
+            if not content.strip():
+                continue
+
+            if tf_type == "table":
+                # Use structure-preserving table chunking
+                table_chunks = chunk_table_with_structure(
+                    content, pdf_name, page_no, position, chunk_number,
+                    max_words, table_link=tf_block.get("table_link", ""), caption=caption
+                )
+                all_chunks.extend(table_chunks)
+                chunk_number += len(table_chunks)
+            else:
+                # Use structure-preserving figure chunking
+                figure_chunks = chunk_figure_with_structure(
+                    content, pdf_name, page_no, position, chunk_number,
+                    max_words, image_link=tf_block.get("image_link", ""), caption=caption
+                )
+                all_chunks.extend(figure_chunks)
+                chunk_number += len(figure_chunks)
+
+            position += 1
+
+        # Step 7: Process any pre-defined blocks (from PDF extraction)
+        if blocks:
+            for block in blocks:
+                block_type = block.get("type", "text")
+                content = block.get("content", "")
+                caption = block.get("caption", "")
+
+                # Remove page numbers
+                content = remove_page_numbers(content)
+                if not content.strip():
+                    continue
+
+                if block_type == "table":
+                    # Use structure-preserving table chunking
+                    table_chunks = chunk_table_with_structure(
+                        content, pdf_name, page_no, position, chunk_number,
+                        max_words, table_link=block.get("table_link", ""), caption=caption
+                    )
+                    all_chunks.extend(table_chunks)
+                    chunk_number += len(table_chunks)
+
+                elif block_type == "image":
+                    # Use structure-preserving figure chunking
+                    figure_chunks = chunk_figure_with_structure(
+                        content, pdf_name, page_no, position, chunk_number,
+                        max_words, image_link=block.get("image_link", ""), caption=caption
+                    )
+                    all_chunks.extend(figure_chunks)
+                    chunk_number += len(figure_chunks)
+
+                position += 1
+
+    # Step 8: Merge small chunks (below min_words)
+    all_chunks = merge_small_chunks_final(all_chunks, min_words)
+
+    # Step 9: Link cross-page context references
+    all_chunks = _link_chunk_context(all_chunks)
+
+    # Add cross-page reference metadata
+    for i, chunk in enumerate(all_chunks):
+        chunk["metadata"]["has_cross_page_reference"] = False
+        if i > 0:
+            prev_chunk = all_chunks[i - 1]
+            if prev_chunk.get("page_no") != chunk.get("page_no"):
+                chunk["metadata"]["has_cross_page_reference"] = True
+                chunk["metadata"]["previous_page"] = prev_chunk.get("page_no")
+
+    return all_chunks
 
 
 def process_document_pages(
