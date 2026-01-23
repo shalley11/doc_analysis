@@ -1,3 +1,4 @@
+import json
 from typing import List, Dict, Any
 from embedding.embedding_client import EmbeddingClient
 from vector_store.milvus_store import MilvusVectorStore
@@ -90,6 +91,11 @@ class ChunkIndexer:
         record["table_link"] = chunk.get("table_link", "") or ""
         record["context_before_id"] = chunk.get("context_before_id", "") or ""
         record["context_after_id"] = chunk.get("context_after_id", "") or ""
+
+        # Structure-based chunking fields
+        section_hierarchy = chunk.get("section_hierarchy", [])
+        record["section_hierarchy"] = json.dumps(section_hierarchy) if section_hierarchy else "[]"
+        record["heading_level"] = int(chunk.get("heading_level", 0) or 0)
 
         return record
 

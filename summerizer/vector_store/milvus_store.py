@@ -111,6 +111,17 @@ class MilvusVectorStore:
                 dtype=DataType.VARCHAR,
                 max_length=64
             ),
+            # Section hierarchy (JSON array of section titles)
+            FieldSchema(
+                name="section_hierarchy",
+                dtype=DataType.VARCHAR,
+                max_length=2048
+            ),
+            # Heading level (0=body, 1=H1, 2=H2, 3=H3)
+            FieldSchema(
+                name="heading_level",
+                dtype=DataType.INT64
+            ),
         ]
 
         schema = CollectionSchema(
@@ -167,7 +178,8 @@ class MilvusVectorStore:
             output_fields=[
                 "text", "content_type", "pdf_name", "page_no",
                 "position", "chunk_number", "image_link", "table_link",
-                "context_before_id", "context_after_id"
+                "context_before_id", "context_after_id",
+                "section_hierarchy", "heading_level"
             ]
         )
         return res[0]

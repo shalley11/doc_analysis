@@ -1,7 +1,9 @@
 # pdf_utils.py
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import fitz  # PyMuPDF
+
+from pdf.structure_detector import FontProfile, extract_block_heading_info, get_section_path_string
 
 
 def save_full_page_image(page, page_no: int, out: str) -> str:
@@ -161,6 +163,237 @@ def process_page_with_positions(page, page_no: int, pdf_name: str, out: str) -> 
     for i, element in enumerate(all_elements):
         element["position"] = i
         del element["y_position"]  # Remove temporary field
+
+    result["blocks"] = all_elements
+    return result
+
+
+def get_text_blocks_with_fonts(page) -> List[Dict[str, Any]]:
+    """
+    Extract text blocks with font metadata from page.
+
+    Returns list of blocks with:
+    - content: text content
+    - bbox: bounding box
+    - y_position: vertical position
+    - font_size: dominant font size
+    - is_bold: whether text is predominantly bold
+    - lines: raw line/span data for detailed analysis
+
+    Args:
+        page: PyMuPDF page object
+
+    Returns:
+        List of block dicts with font metadata
+    """
+    blocks = []
+    text_dict = page.get_text("dict")
+
+    for block in text_dict.get("blocks", []):
+        if block.get("type") != 0:  # Skip non-text blocks
+            continue
+
+        # Extract text and font info
+        text_content = ""
+        total_chars = 0
+        weighted_size = 0
+        bold_chars = 0
+        lines_data = []
+
+        for line in block.get("lines", []):
+            line_text = ""
+            line_spans = []
+
+            for span in line.get("spans", []):
+                span_text = span.get("text", "")
+                line_text += span_text
+                text_content += span_text
+
+                char_count = len(span_text)
+                size = span.get("size", 12)
+                flags = span.get("flags", 0)
+                is_bold = bool(flags & 2**4)
+
+                total_chars += char_count
+                weighted_size += size * char_count
+                if is_bold:
+                    bold_chars += char_count
+
+                line_spans.append({
+                    "text": span_text,
+                    "size": size,
+                    "is_bold": is_bold,
+                    "flags": flags,
+                    "font": span.get("font", "")
+                })
+
+            text_content += "\n"
+            lines_data.append({
+                "text": line_text,
+                "spans": line_spans
+            })
+
+        text_content = text_content.strip()
+        if not text_content:
+            continue
+
+        # Calculate dominant font characteristics
+        font_size = round(weighted_size / total_chars, 1) if total_chars > 0 else 12.0
+        is_bold = bold_chars > total_chars * 0.5
+
+        blocks.append({
+            "type": "text",
+            "content": text_content,
+            "bbox": block.get("bbox"),
+            "y_position": block.get("bbox", [0, 0, 0, 0])[1],
+            "font_size": font_size,
+            "is_bold": is_bold,
+            "lines": lines_data,
+            "raw_block": block  # Keep raw block for structure detection
+        })
+
+    return blocks
+
+
+def process_page_with_structure(
+    page,
+    page_no: int,
+    pdf_name: str,
+    out: str,
+    font_profile: Optional[FontProfile] = None,
+    page_block_paths: Optional[Dict[int, List[str]]] = None
+) -> Dict[str, Any]:
+    """
+    Process page with heading detection using font_profile.
+
+    Extracts all content with position tracking and adds
+    section hierarchy information to each block.
+
+    Args:
+        page: PyMuPDF page object
+        page_no: Page number (0-indexed)
+        pdf_name: Name of the PDF file
+        out: Output directory for extracted images/tables
+        font_profile: Document font profile (optional, for heading detection)
+        page_block_paths: Pre-computed section paths for blocks on this page
+
+    Returns:
+        Page result dict with blocks annotated with section_hierarchy
+    """
+    result = {
+        "metadata": {
+            "pdf_name": pdf_name,
+            "page_no": page_no + 1,
+            "page_count": page.parent.page_count
+        },
+        "scanned": False,
+        "blocks": []
+    }
+
+    # Check if page is scanned
+    text = page.get_text("text").strip()
+    if not text:
+        result["scanned"] = True
+        full_page_path = save_full_page_image(page, page_no, out)
+        result["blocks"].append({
+            "type": "image",
+            "content": None,
+            "image_link": full_page_path,
+            "table_link": None,
+            "y_position": 0,
+            "section_hierarchy": [],
+            "heading_level": 0,
+            "metadata": {"is_full_page": True}
+        })
+        return result
+
+    # Extract all content types
+    all_elements = []
+
+    # Track current section for non-text elements
+    current_section_path = []
+
+    # 1. Extract text blocks with font info
+    text_blocks = get_text_blocks_with_fonts(page)
+    for idx, tb in enumerate(text_blocks):
+        # Get section path from pre-computed paths or use current
+        if page_block_paths is not None:
+            section_path = page_block_paths.get(idx, current_section_path)
+        else:
+            section_path = []
+
+        # Detect heading level if font_profile available
+        heading_level = 0
+        if font_profile and tb.get("raw_block"):
+            heading_info = extract_block_heading_info(tb["raw_block"], font_profile)
+            heading_level = heading_info.get("heading_level", 0) or 0
+
+            # Update current section if this is a heading
+            if heading_level and heading_level > 0:
+                # Heading text becomes part of the section path
+                heading_text = tb["content"].strip()[:200]
+                # Rebuild section path based on heading level
+                if heading_level == 1:
+                    current_section_path = [heading_text]
+                elif heading_level == 2:
+                    current_section_path = current_section_path[:1] + [heading_text]
+                elif heading_level == 3:
+                    current_section_path = current_section_path[:2] + [heading_text]
+                section_path = current_section_path.copy()
+
+        all_elements.append({
+            "type": "text",
+            "content": tb["content"],
+            "image_link": None,
+            "table_link": None,
+            "y_position": tb["y_position"],
+            "font_size": tb["font_size"],
+            "is_bold": tb["is_bold"],
+            "section_hierarchy": section_path,
+            "heading_level": heading_level,
+            "metadata": {}
+        })
+
+    # 2. Extract tables
+    tables = page.find_tables()
+    for i, table in enumerate(tables):
+        table_data = extract_table_as_image(page, table, page_no, i, out)
+        all_elements.append({
+            "type": "table",
+            "content": table_data["table_markdown"],
+            "image_link": None,
+            "table_link": table_data["table_image_path"],
+            "y_position": table_data["y_position"],
+            "section_hierarchy": current_section_path.copy(),
+            "heading_level": 0,
+            "metadata": {
+                "row_count": table_data["row_count"],
+                "col_count": table_data["col_count"]
+            }
+        })
+
+    # 3. Extract images
+    images = page.get_images(full=True)
+    for i, img in enumerate(images):
+        img_data = extract_image(page, img, page_no, i, out)
+        all_elements.append({
+            "type": "image",
+            "content": None,
+            "image_link": img_data["image_path"],
+            "table_link": None,
+            "y_position": img_data["y_position"],
+            "section_hierarchy": current_section_path.copy(),
+            "heading_level": 0,
+            "metadata": {}
+        })
+
+    # Sort by y_position to maintain reading order
+    all_elements.sort(key=lambda x: x["y_position"])
+
+    # Assign positions and clean up
+    for i, element in enumerate(all_elements):
+        element["position"] = i
+        del element["y_position"]
 
     result["blocks"] = all_elements
     return result
