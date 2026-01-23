@@ -3582,6 +3582,9 @@ def chunk_paragraph_with_section(
                 "context_after_id": "",
                 "section_hierarchy": section_path.copy(),
                 "heading_level": heading_level,
+                "table_summary": "",
+                "image_caption": "",
+                "image_summary": "",
                 "metadata": {
                     "chunking_method": "structure_based",
                     "word_count": current_word_count + prefix_words,
@@ -3621,6 +3624,9 @@ def chunk_paragraph_with_section(
             "context_after_id": "",
             "section_hierarchy": section_path.copy(),
             "heading_level": heading_level,
+            "table_summary": "",
+            "image_caption": "",
+            "image_summary": "",
             "metadata": {
                 "chunking_method": "structure_based",
                 "word_count": current_word_count + prefix_words,
@@ -3643,7 +3649,8 @@ def chunk_table_with_section(
     chunk_number: int,
     max_words: int = 500,
     table_link: str = "",
-    caption: str = ""
+    caption: str = "",
+    table_summary: str = ""
 ) -> List[Dict[str, Any]]:
     """
     Chunk table preserving header row in all splits.
@@ -3660,6 +3667,7 @@ def chunk_table_with_section(
         max_words: Maximum words per chunk
         table_link: Link to table image
         caption: Table caption
+        table_summary: Vision model generated table summary
 
     Returns:
         List of chunk dictionaries
@@ -3697,6 +3705,9 @@ def chunk_table_with_section(
             "context_after_id": "",
             "section_hierarchy": section_path.copy(),
             "heading_level": 0,
+            "table_summary": table_summary,
+            "image_caption": "",
+            "image_summary": "",
             "metadata": {
                 "chunking_method": "structure_based",
                 "caption": caption,
@@ -3756,6 +3767,9 @@ def chunk_table_with_section(
                 "context_after_id": "",
                 "section_hierarchy": section_path.copy(),
                 "heading_level": 0,
+                "table_summary": table_summary,
+                "image_caption": "",
+                "image_summary": "",
                 "metadata": {
                     "chunking_method": "structure_based",
                     "caption": caption,
@@ -3798,6 +3812,9 @@ def chunk_table_with_section(
             "context_after_id": "",
             "section_hierarchy": section_path.copy(),
             "heading_level": 0,
+            "table_summary": table_summary,
+            "image_caption": "",
+            "image_summary": "",
             "metadata": {
                 "chunking_method": "structure_based",
                 "caption": caption,
@@ -3870,6 +3887,9 @@ def chunk_list_with_section(
             "context_after_id": "",
             "section_hierarchy": section_path.copy(),
             "heading_level": 0,
+            "table_summary": "",
+            "image_caption": "",
+            "image_summary": "",
             "metadata": {
                 "chunking_method": "structure_based",
                 "item_count": len(items),
@@ -3927,6 +3947,9 @@ def chunk_list_with_section(
                 "context_after_id": "",
                 "section_hierarchy": section_path.copy(),
                 "heading_level": 0,
+                "table_summary": "",
+                "image_caption": "",
+                "image_summary": "",
                 "metadata": {
                     "chunking_method": "structure_based",
                     "item_count": len(current_items),
@@ -3970,6 +3993,9 @@ def chunk_list_with_section(
             "context_after_id": "",
             "section_hierarchy": section_path.copy(),
             "heading_level": 0,
+            "table_summary": "",
+            "image_caption": "",
+            "image_summary": "",
             "metadata": {
                 "chunking_method": "structure_based",
                 "item_count": len(current_items),
@@ -3993,7 +4019,9 @@ def chunk_figure_with_section(
     chunk_number: int,
     max_words: int = 500,
     image_link: str = "",
-    caption: str = ""
+    caption: str = "",
+    image_caption: str = "",
+    image_summary: str = ""
 ) -> List[Dict[str, Any]]:
     """
     Chunk figure with caption preserved.
@@ -4008,6 +4036,8 @@ def chunk_figure_with_section(
         max_words: Maximum words per chunk
         image_link: Link to figure image
         caption: Figure caption
+        image_caption: Vision model generated short caption
+        image_summary: Vision model generated detailed summary
 
     Returns:
         List of chunk dictionaries
@@ -4040,6 +4070,9 @@ def chunk_figure_with_section(
             "context_after_id": "",
             "section_hierarchy": section_path.copy(),
             "heading_level": 0,
+            "table_summary": "",
+            "image_caption": image_caption,
+            "image_summary": image_summary,
             "metadata": {
                 "chunking_method": "structure_based",
                 "caption": caption,
@@ -4097,6 +4130,9 @@ def chunk_figure_with_section(
                 "context_after_id": "",
                 "section_hierarchy": section_path.copy(),
                 "heading_level": 0,
+                "table_summary": "",
+                "image_caption": image_caption,
+                "image_summary": image_summary,
                 "metadata": {
                     "chunking_method": "structure_based",
                     "caption": caption,
@@ -4139,6 +4175,9 @@ def chunk_figure_with_section(
             "context_after_id": "",
             "section_hierarchy": section_path.copy(),
             "heading_level": 0,
+            "table_summary": "",
+            "image_caption": image_caption,
+            "image_summary": image_summary,
             "metadata": {
                 "chunking_method": "structure_based",
                 "caption": caption,
@@ -4269,7 +4308,8 @@ def process_document_with_structure(
                         chunk_number=chunk_number,
                         max_words=max_words,
                         table_link=block.get("table_link", ""),
-                        caption=block.get("caption", "")
+                        caption=block.get("caption", ""),
+                        table_summary=block.get("table_summary", "")
                     )
                     all_chunks.extend(table_chunks)
                     chunk_number += len(table_chunks)
@@ -4285,7 +4325,9 @@ def process_document_with_structure(
                         chunk_number=chunk_number,
                         max_words=max_words,
                         image_link=block.get("image_link", ""),
-                        caption=block.get("caption", "")
+                        caption=block.get("caption", ""),
+                        image_caption=block.get("image_caption", ""),
+                        image_summary=block.get("image_summary", "")
                     )
                     all_chunks.extend(figure_chunks)
                     chunk_number += len(figure_chunks)

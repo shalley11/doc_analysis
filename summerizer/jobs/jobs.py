@@ -605,9 +605,10 @@ def process_pdf_batch_structured(
                 update_stage(batch_id, pdf_name, ProcessingStage.VISION_PROCESSING, StageStatus.RUNNING,
                              progress=int((i + 1) / doc.page_count * 100),
                              current_item=f"Page {i+1} of {doc.page_count}",
-                             message=f"Processing {len(blocks)} blocks with vision model")
+                             message=f"Processing {len(blocks)} blocks with vision model (30 min timeout)")
                 print(f"  Page {i+1}: Processing {len(blocks)} blocks with vision model...")
-                blocks = vision_processor.process_blocks(blocks)
+                # Use process_blocks_with_metadata to populate table_summary, image_caption, image_summary
+                blocks = vision_processor.process_blocks_with_metadata(blocks)
                 page_result["blocks"] = blocks
 
             pdf_processed_pages += 1

@@ -493,7 +493,7 @@ class Gemma3VisionModel(VisionModel):
         mode: str = "local",
         api_key: str = None,
         ollama_base_url: str = "http://localhost:11434",
-        timeout: int = 120
+        timeout: int = 1800  # 30 minutes timeout for vision model
     ):
         """
         Initialize Gemma 3 4B vision model.
@@ -822,6 +822,20 @@ class VisionProcessor:
             print(f"Warning: Vision API failed for {table_image_path}: {e}")
             return FallbackVisionModel().describe_table(table_image_path)
 
+    def generate_image_caption(self, image_path: str) -> str:
+        """Generate a short caption for an image."""
+        caption_prompt = (
+            "Generate a brief caption for this image in 1-2 sentences. "
+            "Focus on what the image shows and its main subject."
+        )
+        try:
+            if hasattr(self.model, '_call'):
+                return self.model._call(image_path, caption_prompt)
+            return self.model.describe_image(image_path, caption_prompt)
+        except Exception as e:
+            print(f"Warning: Vision API failed for caption {image_path}: {e}")
+            return ""
+
     def process_blocks(self, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Process all blocks and add vision-generated descriptions.
@@ -839,5 +853,61 @@ class VisionProcessor:
                     block["table_link"],
                     markdown_fallback
                 )
+
+        return blocks
+
+    def process_blocks_with_metadata(self, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Process all blocks and add vision-generated descriptions and metadata.
+
+        For tables: adds table_summary field
+        For images: adds image_caption and image_summary fields
+
+        Modifies blocks in place and returns them.
+        """
+        for block in blocks:
+            if block["type"] == "image" and block.get("image_link"):
+                image_path = block["image_link"]
+                print(f"  Processing image with vision model: {image_path}")
+
+                # Generate image summary
+                if not block.get("image_summary"):
+                    try:
+                        block["image_summary"] = self.summarize_image(image_path)
+                        print(f"    Generated image summary ({len(block['image_summary'])} chars)")
+                    except Exception as e:
+                        print(f"    Warning: Failed to generate image summary: {e}")
+                        block["image_summary"] = ""
+
+                # Generate image caption
+                if not block.get("image_caption"):
+                    try:
+                        block["image_caption"] = self.generate_image_caption(image_path)
+                        print(f"    Generated image caption ({len(block['image_caption'])} chars)")
+                    except Exception as e:
+                        print(f"    Warning: Failed to generate image caption: {e}")
+                        block["image_caption"] = ""
+
+                # Set content to summary if not already set
+                if not block.get("content"):
+                    block["content"] = block.get("image_summary", "Image")
+
+            elif block["type"] == "table" and block.get("table_link"):
+                table_path = block["table_link"]
+                print(f"  Processing table with vision model: {table_path}")
+
+                # Generate table summary
+                if not block.get("table_summary"):
+                    try:
+                        block["table_summary"] = self.summarize_table(table_path)
+                        print(f"    Generated table summary ({len(block['table_summary'])} chars)")
+                    except Exception as e:
+                        print(f"    Warning: Failed to generate table summary: {e}")
+                        block["table_summary"] = ""
+
+                # Set content to summary if not already set (preserve markdown if available)
+                markdown_fallback = block.get("content", "")
+                if not markdown_fallback or markdown_fallback == "Table":
+                    block["content"] = block.get("table_summary", "Table")
 
         return blocks

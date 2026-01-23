@@ -122,6 +122,23 @@ class MilvusVectorStore:
                 name="heading_level",
                 dtype=DataType.INT64
             ),
+            # Vision model metadata for tables
+            FieldSchema(
+                name="table_summary",
+                dtype=DataType.VARCHAR,
+                max_length=65535
+            ),
+            # Vision model metadata for images
+            FieldSchema(
+                name="image_caption",
+                dtype=DataType.VARCHAR,
+                max_length=4096
+            ),
+            FieldSchema(
+                name="image_summary",
+                dtype=DataType.VARCHAR,
+                max_length=65535
+            ),
         ]
 
         schema = CollectionSchema(
@@ -179,7 +196,8 @@ class MilvusVectorStore:
                 "text", "content_type", "pdf_name", "page_no",
                 "position", "chunk_number", "image_link", "table_link",
                 "context_before_id", "context_after_id",
-                "section_hierarchy", "heading_level"
+                "section_hierarchy", "heading_level",
+                "table_summary", "image_caption", "image_summary"
             ]
         )
         return res[0]

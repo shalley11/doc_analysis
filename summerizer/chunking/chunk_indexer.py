@@ -97,6 +97,11 @@ class ChunkIndexer:
         record["section_hierarchy"] = json.dumps(section_hierarchy) if section_hierarchy else "[]"
         record["heading_level"] = int(chunk.get("heading_level", 0) or 0)
 
+        # Vision model metadata fields
+        record["table_summary"] = chunk.get("table_summary", "") or ""
+        record["image_caption"] = chunk.get("image_caption", "") or ""
+        record["image_summary"] = chunk.get("image_summary", "") or ""
+
         return record
 
     def index_multimodal_chunks(
