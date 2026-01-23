@@ -28,6 +28,7 @@ from vector_store.milvus_store import MilvusVectorStore
 from qa.retriever import Retriever
 from qa.generator import create_generator, get_default_generator
 from qa.qa_service import QAService
+from qa.summary_service import SummaryService, get_summary_service
 
 
 # Q&A Request Models
@@ -69,6 +70,15 @@ class ChatRequest(BaseModel):
     temperature: float = 0.7
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
+
+
+class DocumentSummaryRequest(BaseModel):
+    summary_type: str = "detailed"  # "brief", "detailed", "bullets"
+
+
+class CorpusSummaryRequest(BaseModel):
+    summary_type: str = "detailed"  # "brief", "detailed" for individual docs before corpus
+    include_individual: bool = True  # Include individual document summaries in response
 
 
 # Configuration
@@ -914,6 +924,237 @@ def search_chunks(
                 for c in chunks
             ]
         })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# =============================================================================
+# Summary Generation Endpoints (On-Demand)
+# =============================================================================
+
+@app.post("/api/v2/summary/document/{batch_id}/{pdf_name}", tags=["Summary"])
+def generate_document_summary(
+    batch_id: str,
+    pdf_name: str,
+    request: DocumentSummaryRequest = None
+):
+    """
+    Generate a summary for a specific document on demand.
+
+    Uses Gemma3 model to analyze all chunks from the document and generate
+    a comprehensive summary.
+
+    Summary Types:
+    - brief: 3-5 sentence summary
+    - detailed: Full structured summary with sections, findings, takeaways
+    - bullets: Key points as bullet list
+
+    Note: This is generated on-demand and may take 1-2 minutes for large documents.
+    """
+    if request is None:
+        request = DocumentSummaryRequest()
+
+    # Verify batch exists
+    job = get_job(batch_id)
+    if not job:
+        return JSONResponse({"error": "Batch not found"}, status_code=404)
+
+    if job.get("state") != "completed":
+        return JSONResponse({
+            "error": "Batch processing not complete",
+            "status": job.get("state")
+        }, status_code=400)
+
+    try:
+        # Get chunks for this document from Milvus
+        vector_store = MilvusVectorStore(host=MILVUS_HOST, port=MILVUS_PORT)
+
+        # Search for all chunks from this PDF
+        # Use a broad query to get all chunks
+        embedder = EmbeddingClient(EMBEDDING_SERVICE_URL)
+        query_embedding = embedder.embed_texts(["document content summary overview"])[0]
+
+        all_chunks = vector_store.search(
+            session_id=batch_id,
+            query_embedding=query_embedding,
+            top_k=1000  # Get all chunks
+        )
+
+        # Filter chunks for this specific PDF
+        doc_chunks = [c for c in all_chunks if c.get("pdf_name") == pdf_name]
+
+        if not doc_chunks:
+            return JSONResponse({
+                "error": f"No chunks found for document: {pdf_name}",
+                "batch_id": batch_id
+            }, status_code=404)
+
+        # Generate summary
+        summary_service = get_summary_service()
+        result = summary_service.generate_document_summary(
+            chunks=doc_chunks,
+            pdf_name=pdf_name,
+            summary_type=request.summary_type
+        )
+
+        return JSONResponse({
+            "batch_id": batch_id,
+            **result
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/v2/summary/corpus/{batch_id}", tags=["Summary"])
+def generate_corpus_summary(
+    batch_id: str,
+    request: CorpusSummaryRequest = None
+):
+    """
+    Generate a summary across all documents in a batch.
+
+    First generates individual document summaries, then creates a corpus-wide
+    summary that identifies common themes, patterns, and insights across all
+    documents.
+
+    Note: This is generated on-demand and may take several minutes for
+    batches with many documents.
+    """
+    if request is None:
+        request = CorpusSummaryRequest()
+
+    # Verify batch exists
+    job = get_job(batch_id)
+    if not job:
+        return JSONResponse({"error": "Batch not found"}, status_code=404)
+
+    if job.get("state") != "completed":
+        return JSONResponse({
+            "error": "Batch processing not complete",
+            "status": job.get("state")
+        }, status_code=400)
+
+    try:
+        # Get all chunks from Milvus
+        vector_store = MilvusVectorStore(host=MILVUS_HOST, port=MILVUS_PORT)
+        embedder = EmbeddingClient(EMBEDDING_SERVICE_URL)
+        query_embedding = embedder.embed_texts(["document content summary overview"])[0]
+
+        all_chunks = vector_store.search(
+            session_id=batch_id,
+            query_embedding=query_embedding,
+            top_k=5000  # Get all chunks
+        )
+
+        if not all_chunks:
+            return JSONResponse({
+                "error": "No chunks found for this batch",
+                "batch_id": batch_id
+            }, status_code=404)
+
+        # Group chunks by PDF name
+        chunks_by_pdf = {}
+        for chunk in all_chunks:
+            pdf_name = chunk.get("pdf_name", "Unknown")
+            if pdf_name not in chunks_by_pdf:
+                chunks_by_pdf[pdf_name] = []
+            chunks_by_pdf[pdf_name].append(chunk)
+
+        # Generate individual document summaries
+        summary_service = get_summary_service()
+        document_summaries = []
+
+        for pdf_name, pdf_chunks in chunks_by_pdf.items():
+            print(f"Generating summary for {pdf_name}...")
+            doc_summary = summary_service.generate_document_summary(
+                chunks=pdf_chunks,
+                pdf_name=pdf_name,
+                summary_type=request.summary_type
+            )
+            document_summaries.append(doc_summary)
+
+        # Generate corpus summary
+        corpus_result = summary_service.generate_corpus_summary(
+            document_summaries=document_summaries,
+            batch_id=batch_id
+        )
+
+        response = {
+            "batch_id": batch_id,
+            **corpus_result
+        }
+
+        # Include individual summaries if requested
+        if request.include_individual:
+            response["document_summaries"] = document_summaries
+
+        return JSONResponse(response)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/v2/summary/documents/{batch_id}", tags=["Summary"])
+def list_documents_for_summary(batch_id: str):
+    """
+    List all documents available for summary generation in a batch.
+    """
+    # Verify batch exists
+    job = get_job(batch_id)
+    if not job:
+        return JSONResponse({"error": "Batch not found"}, status_code=404)
+
+    try:
+        # Get all chunks from Milvus
+        vector_store = MilvusVectorStore(host=MILVUS_HOST, port=MILVUS_PORT)
+        embedder = EmbeddingClient(EMBEDDING_SERVICE_URL)
+        query_embedding = embedder.embed_texts(["document"])[0]
+
+        all_chunks = vector_store.search(
+            session_id=batch_id,
+            query_embedding=query_embedding,
+            top_k=5000
+        )
+
+        # Group by PDF name and count
+        pdf_stats = {}
+        for chunk in all_chunks:
+            pdf_name = chunk.get("pdf_name", "Unknown")
+            if pdf_name not in pdf_stats:
+                pdf_stats[pdf_name] = {
+                    "chunk_count": 0,
+                    "content_types": {},
+                    "has_table_summary": False,
+                    "has_image_summary": False
+                }
+            pdf_stats[pdf_name]["chunk_count"] += 1
+
+            ct = chunk.get("content_type", "text")
+            pdf_stats[pdf_name]["content_types"][ct] = \
+                pdf_stats[pdf_name]["content_types"].get(ct, 0) + 1
+
+            if chunk.get("table_summary"):
+                pdf_stats[pdf_name]["has_table_summary"] = True
+            if chunk.get("image_summary"):
+                pdf_stats[pdf_name]["has_image_summary"] = True
+
+        return JSONResponse({
+            "batch_id": batch_id,
+            "document_count": len(pdf_stats),
+            "documents": [
+                {
+                    "pdf_name": name,
+                    **stats
+                }
+                for name, stats in pdf_stats.items()
+            ]
+        })
+
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
