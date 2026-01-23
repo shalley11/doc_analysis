@@ -3159,6 +3159,11 @@ def create_multimodal_chunks(
                 "table_link": table_link or "",
                 "context_before_id": "",
                 "context_after_id": "",
+                "section_hierarchy": block.get("section_hierarchy", []),
+                "heading_level": block.get("heading_level", 0),
+                "table_summary": block.get("table_summary", ""),
+                "image_caption": "",
+                "image_summary": "",
                 "metadata": block.get("metadata", {})
             })
             chunk_number += 1
@@ -3178,6 +3183,11 @@ def create_multimodal_chunks(
                 "table_link": "",
                 "context_before_id": "",
                 "context_after_id": "",
+                "section_hierarchy": block.get("section_hierarchy", []),
+                "heading_level": block.get("heading_level", 0),
+                "table_summary": "",
+                "image_caption": block.get("image_caption", ""),
+                "image_summary": block.get("image_summary", ""),
                 "metadata": block.get("metadata", {})
             })
             chunk_number += 1
@@ -3386,6 +3396,11 @@ def create_semantic_multimodal_chunks(
                 "table_link": table_link or "",
                 "context_before_id": "",
                 "context_after_id": "",
+                "section_hierarchy": block.get("section_hierarchy", []),
+                "heading_level": block.get("heading_level", 0),
+                "table_summary": block.get("table_summary", ""),
+                "image_caption": "",
+                "image_summary": "",
                 "metadata": block.get("metadata", {})
             })
             chunk_number += 1
@@ -3405,6 +3420,11 @@ def create_semantic_multimodal_chunks(
                 "table_link": "",
                 "context_before_id": "",
                 "context_after_id": "",
+                "section_hierarchy": block.get("section_hierarchy", []),
+                "heading_level": block.get("heading_level", 0),
+                "table_summary": "",
+                "image_caption": block.get("image_caption", ""),
+                "image_summary": block.get("image_summary", ""),
                 "metadata": block.get("metadata", {})
             })
             chunk_number += 1

@@ -856,53 +856,162 @@ class VisionProcessor:
 
         return blocks
 
-    def process_blocks_with_metadata(self, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    # Batch processing prompts - separate prompts for images and tables
+    IMAGE_BATCH_SUMMARY_PROMPT = (
+        "Analyze this image from a PDF document and provide:\n\n"
+        "1. IMAGE TYPE: What kind of visual is this (chart, graph, diagram, photo, illustration, screenshot)?\n"
+        "2. MAIN SUBJECT: What is the primary content or topic shown?\n"
+        "3. KEY DATA: List any visible numbers, statistics, percentages, or data points.\n"
+        "4. TEXT/LABELS: Note any important text, titles, labels, or legends.\n"
+        "5. INSIGHT: What is the main takeaway or message?\n\n"
+        "Provide a clear, detailed summary in 4-6 sentences. Be specific with numbers."
+    )
+
+    IMAGE_BATCH_CAPTION_PROMPT = (
+        "Generate a brief, descriptive caption for this image in 1-2 sentences. "
+        "Focus on what the image shows and its main purpose in a document context."
+    )
+
+    TABLE_BATCH_SUMMARY_PROMPT = (
+        "Analyze this table image from a PDF document and provide:\n\n"
+        "1. TABLE PURPOSE: What does this table represent or compare?\n"
+        "2. STRUCTURE: List column headers and describe what each column contains.\n"
+        "3. ROW CATEGORIES: What are the row labels or categories?\n"
+        "4. KEY VALUES: Extract 3-5 important data points with exact values and units.\n"
+        "5. EXTREMES: Identify maximum and minimum values.\n"
+        "6. PATTERNS: Note any trends, comparisons, or notable patterns.\n"
+        "7. TOTALS: Include any summary rows (totals, averages) if present.\n\n"
+        "Provide a comprehensive summary that captures all essential information. Be precise with numbers."
+    )
+
+    def process_blocks_with_metadata(
+        self,
+        blocks: List[Dict[str, Any]],
+        batch_size: int = 5
+    ) -> List[Dict[str, Any]]:
         """
-        Process all blocks and add vision-generated descriptions and metadata.
+        Process all blocks with batch processing for vision model.
 
         For tables: adds table_summary field
         For images: adds image_caption and image_summary fields
 
+        Args:
+            blocks: List of content blocks
+            batch_size: Number of items to process in each batch (default: 5)
+
         Modifies blocks in place and returns them.
         """
-        for block in blocks:
-            if block["type"] == "image" and block.get("image_link"):
-                image_path = block["image_link"]
-                print(f"  Processing image with vision model: {image_path}")
+        # Separate images and tables for batch processing
+        image_blocks = [(i, b) for i, b in enumerate(blocks)
+                        if b.get("type") == "image" and b.get("image_link")]
+        table_blocks = [(i, b) for i, b in enumerate(blocks)
+                        if b.get("type") == "table" and b.get("table_link")]
 
-                # Generate image summary
+        print(f"  Vision batch processing: {len(image_blocks)} images, {len(table_blocks)} tables (batch_size={batch_size})")
+
+        # Process images in batches
+        if image_blocks:
+            self._process_image_batches(blocks, image_blocks, batch_size)
+
+        # Process tables in batches
+        if table_blocks:
+            self._process_table_batches(blocks, table_blocks, batch_size)
+
+        return blocks
+
+    def _process_image_batches(
+        self,
+        blocks: List[Dict[str, Any]],
+        image_blocks: List[tuple],
+        batch_size: int
+    ):
+        """Process images in batches with image-specific prompts."""
+        total_images = len(image_blocks)
+
+        for batch_start in range(0, total_images, batch_size):
+            batch_end = min(batch_start + batch_size, total_images)
+            batch = image_blocks[batch_start:batch_end]
+            batch_num = (batch_start // batch_size) + 1
+            total_batches = (total_images + batch_size - 1) // batch_size
+
+            print(f"    Processing image batch {batch_num}/{total_batches} ({len(batch)} images)...")
+
+            for idx, block in batch:
+                image_path = block["image_link"]
+
+                # Generate image summary with image-specific prompt
                 if not block.get("image_summary"):
                     try:
-                        block["image_summary"] = self.summarize_image(image_path)
-                        print(f"    Generated image summary ({len(block['image_summary'])} chars)")
+                        if hasattr(self.model, '_call'):
+                            block["image_summary"] = self.model._call(
+                                image_path, self.IMAGE_BATCH_SUMMARY_PROMPT
+                            )
+                        else:
+                            block["image_summary"] = self.model.describe_image(
+                                image_path, self.IMAGE_BATCH_SUMMARY_PROMPT
+                            )
+                        print(f"      Image {image_path}: summary ({len(block['image_summary'])} chars)")
                     except Exception as e:
-                        print(f"    Warning: Failed to generate image summary: {e}")
+                        print(f"      Warning: Failed to generate image summary for {image_path}: {e}")
                         block["image_summary"] = ""
 
-                # Generate image caption
+                # Generate image caption with caption-specific prompt
                 if not block.get("image_caption"):
                     try:
-                        block["image_caption"] = self.generate_image_caption(image_path)
-                        print(f"    Generated image caption ({len(block['image_caption'])} chars)")
+                        if hasattr(self.model, '_call'):
+                            block["image_caption"] = self.model._call(
+                                image_path, self.IMAGE_BATCH_CAPTION_PROMPT
+                            )
+                        else:
+                            block["image_caption"] = self.model.describe_image(
+                                image_path, self.IMAGE_BATCH_CAPTION_PROMPT
+                            )
+                        print(f"      Image {image_path}: caption ({len(block['image_caption'])} chars)")
                     except Exception as e:
-                        print(f"    Warning: Failed to generate image caption: {e}")
+                        print(f"      Warning: Failed to generate image caption for {image_path}: {e}")
                         block["image_caption"] = ""
 
                 # Set content to summary if not already set
                 if not block.get("content"):
                     block["content"] = block.get("image_summary", "Image")
 
-            elif block["type"] == "table" and block.get("table_link"):
-                table_path = block["table_link"]
-                print(f"  Processing table with vision model: {table_path}")
+                # Update the block in the original list
+                blocks[idx] = block
 
-                # Generate table summary
+    def _process_table_batches(
+        self,
+        blocks: List[Dict[str, Any]],
+        table_blocks: List[tuple],
+        batch_size: int
+    ):
+        """Process tables in batches with table-specific prompts."""
+        total_tables = len(table_blocks)
+
+        for batch_start in range(0, total_tables, batch_size):
+            batch_end = min(batch_start + batch_size, total_tables)
+            batch = table_blocks[batch_start:batch_end]
+            batch_num = (batch_start // batch_size) + 1
+            total_batches = (total_tables + batch_size - 1) // batch_size
+
+            print(f"    Processing table batch {batch_num}/{total_batches} ({len(batch)} tables)...")
+
+            for idx, block in batch:
+                table_path = block["table_link"]
+
+                # Generate table summary with table-specific prompt
                 if not block.get("table_summary"):
                     try:
-                        block["table_summary"] = self.summarize_table(table_path)
-                        print(f"    Generated table summary ({len(block['table_summary'])} chars)")
+                        if hasattr(self.model, '_call'):
+                            block["table_summary"] = self.model._call(
+                                table_path, self.TABLE_BATCH_SUMMARY_PROMPT
+                            )
+                        else:
+                            block["table_summary"] = self.model.describe_table(
+                                table_path, self.TABLE_BATCH_SUMMARY_PROMPT
+                            )
+                        print(f"      Table {table_path}: summary ({len(block['table_summary'])} chars)")
                     except Exception as e:
-                        print(f"    Warning: Failed to generate table summary: {e}")
+                        print(f"      Warning: Failed to generate table summary for {table_path}: {e}")
                         block["table_summary"] = ""
 
                 # Set content to summary if not already set (preserve markdown if available)
@@ -910,4 +1019,5 @@ class VisionProcessor:
                 if not markdown_fallback or markdown_fallback == "Table":
                     block["content"] = block.get("table_summary", "Table")
 
-        return blocks
+                # Update the block in the original list
+                blocks[idx] = block

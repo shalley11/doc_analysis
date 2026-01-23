@@ -59,6 +59,9 @@ GEMMA3_MODE = os.environ.get("GEMMA3_MODE", "local")  # "local" or "api"
 OLLAMA_MODEL = os.environ.get("OLLAMA_VISION_MODEL")  # e.g., "llava", "moondream"
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 
+# Vision model batch processing configuration
+VISION_BATCH_SIZE = int(os.environ.get("VISION_BATCH_SIZE", "5"))  # Batch size for image/table processing
+
 
 def process_pdf_batch(batch_id: str, input_dir: str, output_dir: str):
     print("JOB STARTED:", batch_id)
@@ -325,9 +328,10 @@ def process_pdf_batch_multimodal(
                 update_stage(batch_id, pdf_name, ProcessingStage.VISION_PROCESSING, StageStatus.RUNNING,
                              progress=int((i + 1) / doc.page_count * 100),
                              current_item=f"Page {i+1} of {doc.page_count}",
-                             message=f"Processing {len(blocks)} blocks with vision model")
-                print(f"  Page {i+1}: Processing {len(blocks)} blocks with vision model...")
-                blocks = vision_processor.process_blocks(blocks)
+                             message=f"Processing {len(blocks)} blocks with vision model (batch_size={VISION_BATCH_SIZE})")
+                print(f"  Page {i+1}: Processing {len(blocks)} blocks with vision model (batch_size={VISION_BATCH_SIZE})...")
+                # Use process_blocks_with_metadata to populate table_summary, image_caption, image_summary
+                blocks = vision_processor.process_blocks_with_metadata(blocks, batch_size=VISION_BATCH_SIZE)
                 page_result["blocks"] = blocks
 
             # Create chunks from blocks
@@ -605,10 +609,10 @@ def process_pdf_batch_structured(
                 update_stage(batch_id, pdf_name, ProcessingStage.VISION_PROCESSING, StageStatus.RUNNING,
                              progress=int((i + 1) / doc.page_count * 100),
                              current_item=f"Page {i+1} of {doc.page_count}",
-                             message=f"Processing {len(blocks)} blocks with vision model (30 min timeout)")
-                print(f"  Page {i+1}: Processing {len(blocks)} blocks with vision model...")
+                             message=f"Processing {len(blocks)} blocks with vision model (batch_size={VISION_BATCH_SIZE})")
+                print(f"  Page {i+1}: Processing {len(blocks)} blocks with vision model (batch_size={VISION_BATCH_SIZE})...")
                 # Use process_blocks_with_metadata to populate table_summary, image_caption, image_summary
-                blocks = vision_processor.process_blocks_with_metadata(blocks)
+                blocks = vision_processor.process_blocks_with_metadata(blocks, batch_size=VISION_BATCH_SIZE)
                 page_result["blocks"] = blocks
 
             pdf_processed_pages += 1
