@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from typing import Optional, List as TypingList
 
 from pdf.pdf_utils import process_page, page_to_markdown
-from jobs.jobs import process_pdf_batch, process_pdf_batch_multimodal
+from jobs.jobs import process_pdf_batch, process_pdf_batch_multimodal, process_pdf_batch_structured
 from jobs.job_state import init_job, get_job
 from jobs.processing_status import (
     get_batch_status,
@@ -496,6 +496,7 @@ def analyze_pdfs_multimodal(
     files: List[UploadFile] = File(...),
     use_vision: str = Query("yes", description="Use vision model for image/table descriptions"),
     use_semantic_chunking: str = Query("no", description="Use embedding-based semantic chunking for better topic boundaries"),
+    use_structure_chunking: str = Query("no", description="Use structure-based chunking with section hierarchy detection"),
     semantic_similarity_threshold: float = Query(0.5, description="Similarity threshold for semantic chunking (0-1)"),
     semantic_percentile_threshold: float = Query(25, description="Use bottom N percentile of similarities as breakpoints"),
     semantic_min_chunk_size: int = Query(50, description="Minimum words per chunk for semantic chunking"),
@@ -512,12 +513,19 @@ def analyze_pdfs_multimodal(
     - Uses vision models (if configured) for image/table descriptions
     - Creates chunks with image_link and table_link for explainability
     - Optionally uses embedding-based semantic chunking for better topic boundaries
+    - Optionally uses structure-based chunking with section hierarchy detection
     - Indexes all content into Milvus
 
     Semantic Chunking:
     - When enabled, uses sentence embeddings to detect topic shifts
     - Splits text at semantic boundaries rather than fixed word counts
     - Produces more coherent chunks that preserve topical context
+
+    Structure-Based Chunking:
+    - Analyzes PDF fonts to detect headings (H1, H2, H3)
+    - Builds section hierarchy across pages
+    - Adds [Section: ...] prefix to chunks for context
+    - Stores section_hierarchy and heading_level in each chunk
 
     Set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable for vision features.
     """
@@ -543,20 +551,38 @@ def analyze_pdfs_multimodal(
                 pages_preview.append(page_to_markdown(page_result))
             previews[file.filename] = "\n\n".join(pages_preview)
 
-    # Use multimodal processing job
+    # Determine chunking mode and enqueue appropriate job
     semantic_enabled = use_semantic_chunking.lower() == "yes"
-    job = queue.enqueue(
-        process_pdf_batch_multimodal,
-        batch_id,
-        str(input_dir),
-        str(output_dir),
-        use_vision.lower() == "yes",
-        semantic_enabled,
-        semantic_similarity_threshold,
-        semantic_percentile_threshold if semantic_enabled else None,
-        semantic_min_chunk_size,
-        semantic_max_chunk_size
-    )
+    structure_enabled = use_structure_chunking.lower() == "yes"
+
+    if structure_enabled:
+        # Use structure-based chunking with section hierarchy
+        job = queue.enqueue(
+            process_pdf_batch_structured,
+            batch_id,
+            str(input_dir),
+            str(output_dir),
+            use_vision.lower() == "yes",
+            semantic_max_chunk_size,  # max_words
+            semantic_min_chunk_size   # min_words
+        )
+        chunking_mode = "structure"
+    else:
+        # Use multimodal processing job
+        job = queue.enqueue(
+            process_pdf_batch_multimodal,
+            batch_id,
+            str(input_dir),
+            str(output_dir),
+            use_vision.lower() == "yes",
+            semantic_enabled,
+            semantic_similarity_threshold,
+            semantic_percentile_threshold if semantic_enabled else None,
+            semantic_min_chunk_size,
+            semantic_max_chunk_size
+        )
+        chunking_mode = "semantic" if semantic_enabled else "multimodal"
+
     init_job(batch_id, rq_job_id=job.id)
 
     # Initialize detailed status tracking
@@ -567,10 +593,11 @@ def analyze_pdfs_multimodal(
         "batch_id": batch_id,
         "rq_job_id": job.id,
         "uploaded_files": [f.filename for f in files],
-        "message": "Files uploaded. Multimodal background processing started.",
-        "mode": "multimodal",
+        "message": f"Files uploaded. {chunking_mode.title()} background processing started.",
+        "mode": chunking_mode,
         "vision_enabled": use_vision.lower() == "yes",
         "semantic_chunking_enabled": semantic_enabled,
+        "structure_chunking_enabled": structure_enabled,
         "preview_markdown": previews if preview_only.lower() == "yes" else None,
         "static_base_url": f"/static/{batch_id}",
         "status_url": f"/api/v2/status/{batch_id}",
