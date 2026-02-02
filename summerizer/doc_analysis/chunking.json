@@ -1,6 +1,6 @@
 {
   "_comment": "POC Debug Output - Remove in PROD",
-  "batch_id": "e84de266-d333-407c-9e1c-67b33fa5dc26",
+  "batch_id": "6aea2174-f0ad-469c-a73e-4a24134dd708",
   "total_chunks": 8,
   "chunks": [
     {
@@ -12,7 +12,7 @@
       "content_type": "image",
       "chunk_seq": 1,
       "word_count": 2,
-      "image_path": "/tmp/doc_images/image_pdf_1_1_b5b57c8f.jpeg",
+      "image_path": "/tmp/doc_images/image_pdf_1_1_7230cbf3.jpeg",
       "image_summary": "",
       "bbox": [
         441.5500183105469,
@@ -46,7 +46,7 @@
       "content_type": "image",
       "chunk_seq": 3,
       "word_count": 2,
-      "image_path": "/tmp/doc_images/image_pdf_1_2_83a1fcf6.jpeg",
+      "image_path": "/tmp/doc_images/image_pdf_1_2_be70d07a.jpeg",
       "image_summary": "",
       "bbox": [
         36.00001525878906,
@@ -80,7 +80,7 @@
       "content_type": "image",
       "chunk_seq": 5,
       "word_count": 2,
-      "image_path": "/tmp/doc_images/image_pdf_1_3_b6b12d2b.jpeg",
+      "image_path": "/tmp/doc_images/image_pdf_1_3_5711c152.jpeg",
       "image_summary": "",
       "bbox": [
         547.2999877929688,
@@ -114,7 +114,7 @@
       "content_type": "image",
       "chunk_seq": 7,
       "word_count": 2,
-      "image_path": "/tmp/doc_images/image_pdf_1_4_04d1b300.jpeg",
+      "image_path": "/tmp/doc_images/image_pdf_1_4_9c4388c4.jpeg",
       "image_summary": "",
       "bbox": [
         234.55001831054688,
