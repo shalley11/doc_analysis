@@ -25,6 +25,15 @@ CONTEXT_WARNING_THRESHOLD = 80
 CONTEXT_ERROR_THRESHOLD = 95
 CONTEXT_REJECT_THRESHOLD = 100  # Reject requests exceeding this percentage
 
+# =========================
+# Redis Configuration
+# =========================
+
+REDIS_HOST = "localhost"
+REDIS_PORT = 6379
+REDIS_DB = 0
+REFINEMENT_TTL = 7200  # 2 hours TTL for session expiry
+
 
 def get_model_context_length(model: str) -> int:
     """Get context length for a model."""

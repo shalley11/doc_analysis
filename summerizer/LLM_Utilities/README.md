@@ -493,7 +493,7 @@ MODEL_CONTEXT_LENGTHS = {
 
 ## Session Management
 
-- **TTL**: 1 hour default
+- **TTL**: 2 hours default
 - **Extend**: `POST /refine/{id}/extend?ttl_seconds=3600`
 - **Cleanup**: `DELETE /refine/{id}` or auto-expire
 

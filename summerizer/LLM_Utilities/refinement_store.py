@@ -13,16 +13,12 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, asdict
 
-from config import OLLAMA_URL
+from config import REDIS_HOST, REDIS_PORT, REDIS_DB, REFINEMENT_TTL
 from logging_config import get_llm_logger
 
 logger = get_llm_logger()
 
-# Redis configuration
-REDIS_HOST = "localhost"
-REDIS_PORT = 6379
-REDIS_DB = 0
-REFINEMENT_TTL = 3600  # 1 hour TTL
+# Key prefix for refinement sessions
 REFINEMENT_KEY_PREFIX = "refine"
 
 
