@@ -361,3 +361,70 @@ def get_contextual_refinement_prompt(
         user_feedback=user_feedback,
         relevant_context=relevant_context
     )
+
+
+# =========================
+# Summary Regeneration Prompt
+# =========================
+
+REGENERATION_PROMPT = """
+You are regenerating a summary from the source document based on user feedback.
+
+The user was not satisfied with the previous summary and has provided specific guidance
+for how the new summary should be generated.
+
+PREVIOUS SUMMARY (for reference - do NOT simply modify this):
+{previous_summary}
+
+USER FEEDBACK/GUIDANCE:
+{user_feedback}
+
+DOCUMENT CONTENT (chunks ordered by relevance to user feedback):
+{document_text}
+
+SUMMARY TYPE: {summary_type}
+
+IMPORTANT RULES:
+- Generate a COMPLETELY NEW summary from the document content
+- Follow the user's guidance and feedback carefully
+- Use ONLY information present in the document content
+- Do NOT copy the previous summary - create fresh content
+- If the content is not in English, translate internally before summarizing
+- Preserve factual accuracy (numbers, dates, names, metrics)
+
+TASK:
+Generate a new {summary_type} summary that:
+1. Addresses the user's specific requirements and feedback
+2. Is based directly on the document content (not the previous summary)
+3. Provides better coverage of the aspects the user cares about
+
+OUTPUT:
+New Summary:
+"""
+
+
+REGENERATION_TYPE_INSTRUCTIONS = {
+    "brief": "brief and concise",
+    "bulletwise": "bullet-point format",
+    "detailed": "detailed and comprehensive",
+    "executive": "executive-level, focusing on key outcomes and implications"
+}
+
+
+def get_regeneration_prompt(
+    document_text: str,
+    user_feedback: str,
+    summary_type: str,
+    previous_summary: str
+) -> str:
+    """Generate prompt for summary regeneration from source chunks."""
+    type_instruction = REGENERATION_TYPE_INSTRUCTIONS.get(
+        summary_type, "detailed"
+    )
+
+    return REGENERATION_PROMPT.format(
+        previous_summary=previous_summary,
+        user_feedback=user_feedback,
+        document_text=document_text,
+        summary_type=type_instruction
+    )

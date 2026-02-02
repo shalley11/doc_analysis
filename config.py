@@ -41,6 +41,13 @@ SUMMARY_REDIS_TTL = 3600            # 1 hour TTL for intermediate summaries in R
 # - redis_only: Store all summaries in Redis only (temporary, not searchable)
 SUMMARY_STORAGE_MODE = "hybrid"
 
+# Redis settings
+REDIS_HOST = "localhost"
+REDIS_PORT = 6379
+
+# Summary request tracking
+REQUEST_TTL_SECONDS = 2 * 3600  # 2 hours TTL for summary requests
+
 # Testing: Page range filter (set to None to process all pages)
 TEST_START_PAGE = 2  # Start page (1-indexed, inclusive)
 TEST_END_PAGE = 4    # End page (1-indexed, inclusive)

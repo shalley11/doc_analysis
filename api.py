@@ -897,7 +897,14 @@ from doc_analysis.summarization.summary_service import (
     SummaryType,
     refine_summary_simple,
     refine_summary_contextual,
-    get_cached_summary
+    get_cached_summary,
+    # Request-based functions
+    generate_summary_with_request_id,
+    refine_summary_by_request_id,
+    regenerate_summary_by_request_id,
+    get_request_details,
+    delete_request,
+    get_summary_history
 )
 
 
@@ -1605,3 +1612,430 @@ def refine_summary_contextual_endpoint(request: ContextualRefinementRequest):
     except Exception as e:
         logger.error(f"Contextual refinement failed: {str(e)}{user_info}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# REQUEST-BASED SUMMARY APIs
+# ============================================================================
+
+class SummaryWithRequestResponse(BaseModel):
+    """Response for summary generation with request_id."""
+    request_id: str = Field(..., description="Unique request identifier for refinement/regeneration")
+    batch_id: str = Field(..., description="Batch identifier")
+    pdf_name: str = Field(..., description="PDF filename")
+    summary_type: str = Field(..., description="Type of summary generated")
+    summary: str = Field(..., description="Generated summary text")
+    method: str = Field(..., description="Generation method used")
+    total_chunks: int = Field(..., description="Number of chunks processed")
+    total_pages: int = Field(..., description="Number of pages in document")
+    cached: bool = Field(..., description="Whether summary was from cache")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "batch_id": "550e8400-e29b-41d4-a716-446655440000",
+                "pdf_name": "report.pdf",
+                "summary_type": "detailed",
+                "summary": "This comprehensive report analyzes...",
+                "method": "hierarchical",
+                "total_chunks": 48,
+                "total_pages": 25,
+                "cached": False
+            }
+        }
+
+
+class RefineByRequestRequest(BaseModel):
+    """Request body for refining summary by request_id."""
+    request_id: str = Field(
+        ...,
+        description="Previous request ID to refine",
+        example="a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    )
+    user_feedback: str = Field(
+        ...,
+        description="Feedback/instructions for refinement",
+        min_length=1,
+        max_length=2000,
+        example="Make it more concise and focus on financial metrics"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "user_feedback": "Make it more concise and focus on financial metrics"
+            }
+        }
+
+
+class RegenerateByRequestRequest(BaseModel):
+    """Request body for regenerating summary by request_id."""
+    request_id: str = Field(
+        ...,
+        description="Previous request ID to regenerate from",
+        example="a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    )
+    user_feedback: str = Field(
+        ...,
+        description="Guidance for regeneration - what to focus on or change",
+        min_length=1,
+        max_length=2000,
+        example="Focus more on risk factors and include specific numbers from the financial tables"
+    )
+    top_k: int = Field(
+        20,
+        description="Number of chunks to prioritize based on feedback relevance",
+        ge=5,
+        le=100,
+        example=20
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "user_feedback": "Focus more on risk factors and include specific numbers",
+                "top_k": 20
+            }
+        }
+
+
+class RefineByRequestResponse(BaseModel):
+    """Response for refine by request_id."""
+    request_id: str = Field(..., description="New request ID for this refined summary")
+    parent_request_id: str = Field(..., description="Previous request ID that was refined")
+    batch_id: str = Field(..., description="Batch identifier")
+    pdf_name: str = Field(..., description="PDF filename")
+    summary_type: str = Field(..., description="Summary type")
+    original_summary: str = Field(..., description="Original summary before refinement")
+    refined_summary: str = Field(..., description="Refined summary text")
+    user_feedback: str = Field(..., description="User feedback used")
+    method: str = Field(..., description="Method used (refine)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "request_id": "new-request-id-here",
+                "parent_request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "batch_id": "550e8400-e29b-41d4-a716-446655440000",
+                "pdf_name": "report.pdf",
+                "summary_type": "detailed",
+                "original_summary": "Original summary text...",
+                "refined_summary": "Refined summary with improvements...",
+                "user_feedback": "Make it more concise",
+                "method": "refine"
+            }
+        }
+
+
+class RegenerateByRequestResponse(BaseModel):
+    """Response for regenerate by request_id."""
+    request_id: str = Field(..., description="New request ID for regenerated summary")
+    parent_request_id: str = Field(..., description="Previous request ID")
+    batch_id: str = Field(..., description="Batch identifier")
+    pdf_name: str = Field(..., description="PDF filename")
+    summary_type: str = Field(..., description="Summary type")
+    previous_summary: str = Field(..., description="Previous summary for reference")
+    regenerated_summary: str = Field(..., description="Newly regenerated summary")
+    user_feedback: str = Field(..., description="User guidance used")
+    method: str = Field(..., description="Method used (regenerate)")
+    chunks_used: int = Field(..., description="Total chunks from document")
+    relevant_chunks: int = Field(..., description="Chunks prioritized based on feedback")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "request_id": "new-request-id-here",
+                "parent_request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "batch_id": "550e8400-e29b-41d4-a716-446655440000",
+                "pdf_name": "report.pdf",
+                "summary_type": "detailed",
+                "previous_summary": "Previous summary...",
+                "regenerated_summary": "Completely new summary based on feedback...",
+                "user_feedback": "Focus on financial data",
+                "method": "regenerate",
+                "chunks_used": 48,
+                "relevant_chunks": 15
+            }
+        }
+
+
+class RequestDetailsResponse(BaseModel):
+    """Response for request details."""
+    request_id: str = Field(..., description="Request identifier")
+    batch_id: str = Field(..., description="Batch identifier")
+    pdf_name: str = Field(..., description="PDF filename")
+    summary_type: str = Field(..., description="Summary type")
+    summary: str = Field(..., description="Summary text")
+    method: str = Field(..., description="Generation method")
+    user_feedback: Optional[str] = Field(None, description="User feedback if any")
+    parent_request_id: Optional[str] = Field(None, description="Parent request if refined/regenerated")
+    created_at: str = Field(..., description="Creation timestamp")
+    chunks_used: int = Field(..., description="Chunks used")
+    total_chunks: int = Field(..., description="Total chunks")
+    total_pages: int = Field(..., description="Total pages")
+
+
+class RequestHistoryItem(BaseModel):
+    """Single item in request history."""
+    request_id: str
+    batch_id: str
+    pdf_name: str
+    summary_type: str
+    method: str
+    created_at: str
+    parent_request_id: Optional[str] = None
+    user_feedback: Optional[str] = None
+    summary_preview: str
+
+
+@app.get(
+    "/summary/generate",
+    response_model=SummaryWithRequestResponse,
+    responses={
+        200: {"description": "Summary generated successfully with request_id"},
+        404: {"description": "PDF not found", "model": ErrorResponse},
+        500: {"description": "Generation failed", "model": ErrorResponse}
+    },
+    tags=["Summarization"],
+    summary="Generate summary with request tracking",
+    description="""
+Generate a summary for a PDF and receive a **request_id** for future refinement or regeneration.
+
+## Workflow
+
+1. **Generate**: Call this endpoint to get initial summary + `request_id`
+2. **Refine**: Use `POST /summary/request/refine` with `request_id` + feedback
+3. **Regenerate**: Use `POST /summary/request/regenerate` with `request_id` + feedback
+
+## Request Tracking
+
+- Each request gets a unique `request_id` stored in Redis
+- Request data includes: summary, metadata, timestamps
+- Requests expire after 2 hours (configurable)
+- Refinement/regeneration creates new request_id, links to parent
+
+## Example Flow
+
+```
+Generate (request_id: abc123)
+    ↓
+Refine with feedback (request_id: def456, parent: abc123)
+    ↓
+Regenerate with guidance (request_id: ghi789, parent: def456)
+```
+
+Each step preserves history for audit and comparison.
+""",
+)
+def generate_summary_with_tracking(
+    batch_id: str = Query(..., description="Batch identifier"),
+    pdf_name: str = Query(..., description="PDF filename to summarize"),
+    summary_type: SummaryType = Query(SummaryType.DETAILED, description="Summary type"),
+    use_cache: bool = Query(True, description="Use cached summary if available")
+):
+    """Generate summary with request_id for tracking."""
+    logger.info(f"Generate with tracking: batch={batch_id}, pdf={pdf_name}, type={summary_type}")
+
+    try:
+        result = generate_summary_with_request_id(
+            batch_id=batch_id,
+            pdf_name=pdf_name,
+            summary_type=summary_type,
+            use_cache=use_cache
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Generate with tracking failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    "/summary/request/refine",
+    response_model=RefineByRequestResponse,
+    responses={
+        200: {"description": "Summary refined successfully"},
+        404: {"description": "Request not found", "model": ErrorResponse},
+        500: {"description": "Refinement failed", "model": ErrorResponse}
+    },
+    tags=["Summary Refinement"],
+    summary="Refine summary by request ID",
+    description="""
+Refine a previous summary using its **request_id** and user feedback.
+
+## How It Works
+
+1. Retrieves previous summary from Redis using `request_id`
+2. Applies user feedback to refine the summary
+3. **Does NOT** access source documents (fast operation)
+4. Creates new `request_id` for the refined result
+5. Links to parent request for history tracking
+
+## Best For
+
+- Style changes (more formal, casual, technical)
+- Length adjustments (shorter, longer)
+- Format changes (bullets, paragraphs)
+- Focus shifts (emphasize different aspects)
+
+## Limitations
+
+Cannot add information not present in the original summary.
+For adding new details, use `/summary/request/regenerate` instead.
+
+## Request Chain
+
+Each refinement creates a new request linked to its parent:
+```
+Original (abc123) → Refined (def456) → Refined Again (ghi789)
+```
+""",
+)
+def refine_by_request_endpoint(request: RefineByRequestRequest):
+    """Refine summary using request_id and feedback."""
+    logger.info(f"Refine by request: {request.request_id}")
+
+    try:
+        result = refine_summary_by_request_id(
+            request_id=request.request_id,
+            user_feedback=request.user_feedback
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Refine by request failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    "/summary/request/regenerate",
+    response_model=RegenerateByRequestResponse,
+    responses={
+        200: {"description": "Summary regenerated successfully"},
+        404: {"description": "Request not found or no chunks", "model": ErrorResponse},
+        500: {"description": "Regeneration failed", "model": ErrorResponse}
+    },
+    tags=["Summary Refinement"],
+    summary="Regenerate summary by request ID",
+    description="""
+Regenerate a summary from scratch using **request_id**, user feedback, and source chunks from Milvus.
+
+## How It Works
+
+1. Retrieves request metadata from Redis using `request_id`
+2. Fetches **all chunks** for the PDF from Milvus vector database
+3. Generates embedding for user feedback
+4. Prioritizes chunks relevant to user's feedback (top_k)
+5. Regenerates summary from source content with user guidance
+6. Creates new `request_id` for the regenerated result
+
+## Best For
+
+- Adding missing information
+- Completely changing summary focus
+- Incorporating specific details from document
+- When refinement isn't sufficient
+
+## Parameters
+
+- **top_k**: Number of chunks to prioritize based on feedback relevance (default: 20)
+  - Higher values = more context, but potentially less focused
+  - Lower values = more focused on feedback-relevant content
+
+## Difference from Refine
+
+| Refine | Regenerate |
+|--------|------------|
+| Uses previous summary only | Fetches from Milvus |
+| Fast (no DB access) | Slower (vector search + LLM) |
+| Cannot add new info | Can incorporate any document content |
+| Style/format changes | Content changes |
+""",
+)
+def regenerate_by_request_endpoint(request: RegenerateByRequestRequest):
+    """Regenerate summary from Milvus using request_id and feedback."""
+    logger.info(f"Regenerate by request: {request.request_id}, top_k={request.top_k}")
+
+    try:
+        result = regenerate_summary_by_request_id(
+            request_id=request.request_id,
+            user_feedback=request.user_feedback,
+            top_k=request.top_k
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Regenerate by request failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(
+    "/summary/request/{request_id}",
+    response_model=RequestDetailsResponse,
+    responses={
+        200: {"description": "Request details retrieved"},
+        404: {"description": "Request not found", "model": ErrorResponse}
+    },
+    tags=["Summarization"],
+    summary="Get request details",
+    description="Retrieve details of a summary request including the full summary text and metadata.",
+)
+def get_request_details_endpoint(
+    request_id: str = Path(..., description="Request identifier")
+):
+    """Get details of a summary request."""
+    result = get_request_details(request_id)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Request not found: {request_id}")
+    return result
+
+
+@app.delete(
+    "/summary/request/{request_id}",
+    responses={
+        200: {"description": "Request deleted successfully"},
+        404: {"description": "Request not found", "model": ErrorResponse}
+    },
+    tags=["Summarization"],
+    summary="Delete a request",
+    description="Delete a summary request from Redis. This action is irreversible.",
+)
+def delete_request_endpoint(
+    request_id: str = Path(..., description="Request identifier to delete")
+):
+    """Delete a summary request."""
+    if delete_request(request_id):
+        return {"message": f"Request {request_id} deleted successfully"}
+    raise HTTPException(status_code=404, detail=f"Request not found: {request_id}")
+
+
+@app.get(
+    "/summary/history/{batch_id}",
+    response_model=List[RequestHistoryItem],
+    tags=["Summarization"],
+    summary="Get summary request history",
+    description="""
+Get the history of summary requests for a batch.
+
+Returns a list of requests sorted by creation time (newest first),
+with summary previews instead of full text.
+
+Use this to:
+- View all summaries generated for a batch
+- Track refinement/regeneration chains
+- Find specific request IDs for further operations
+""",
+)
+def get_history_endpoint(
+    batch_id: str = Path(..., description="Batch identifier"),
+    pdf_name: Optional[str] = Query(None, description="Filter by PDF name"),
+    limit: int = Query(10, description="Maximum requests to return", ge=1, le=100)
+):
+    """Get summary request history for a batch."""
+    return get_summary_history(batch_id, pdf_name, limit)

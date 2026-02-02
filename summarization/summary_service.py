@@ -32,9 +32,17 @@ from doc_analysis.summarization.summary_store import (
 )
 from doc_analysis.summarization.summary_prompts import (
     get_simple_refinement_prompt,
-    get_contextual_refinement_prompt
+    get_contextual_refinement_prompt,
+    get_regeneration_prompt
 )
 from doc_analysis.embedding.e5_embedder import embed_passages
+from doc_analysis.summarization.request_store import (
+    generate_request_id,
+    store_summary_request,
+    get_summary_request,
+    delete_summary_request,
+    get_request_history
+)
 
 logger = get_summarization_logger()
 
@@ -390,3 +398,351 @@ def refine_summary_contextual(
                 for c in relevant_chunks
             ]
         }
+
+
+# =========================
+# Request-based Summary Functions
+# =========================
+
+def generate_summary_with_request_id(
+    batch_id: str,
+    pdf_name: str,
+    summary_type: SummaryType,
+    use_cache: bool = True
+) -> Dict:
+    """
+    Generate summary for a PDF and return with a unique request_id.
+
+    The request_id and metadata are stored in Redis for later refinement
+    or regeneration.
+
+    Args:
+        batch_id: Batch identifier
+        pdf_name: Name of the PDF to summarize
+        summary_type: Type of summary (brief, bulletwise, detailed, executive)
+        use_cache: Whether to use cached summaries if available
+
+    Returns:
+        Dictionary with summary, request_id, and metadata
+    """
+    with BatchContext(batch_id):
+        logger.info(f"[SERVICE] generate_summary_with_request_id START | pdf={pdf_name} | type={summary_type.value}")
+
+        # Generate the summary using existing function
+        result = generate_pdf_summary(
+            batch_id=batch_id,
+            pdf_name=pdf_name,
+            summary_type=summary_type,
+            use_cache=use_cache
+        )
+
+        # Generate request ID
+        request_id = generate_request_id()
+
+        # Store in Redis
+        store_summary_request(
+            request_id=request_id,
+            batch_id=batch_id,
+            pdf_name=pdf_name,
+            summary_type=summary_type.value,
+            summary=result["summary"],
+            method=result.get("method", "unknown"),
+            total_chunks=result.get("total_chunks", 0),
+            total_pages=result.get("total_pages", 0),
+            additional_metadata={
+                "cached": result.get("cached", False),
+                "storage_mode": result.get("storage_mode", SUMMARY_STORAGE_MODE)
+            }
+        )
+
+        # Add request_id to response
+        result["request_id"] = request_id
+
+        logger.info(f"[SERVICE] generate_summary_with_request_id END | request_id={request_id}")
+        return result
+
+
+def refine_summary_by_request_id(
+    request_id: str,
+    user_feedback: str,
+    config: Optional[SummarizerConfig] = None
+) -> Dict:
+    """
+    Refine a summary using a previous request_id and user feedback.
+
+    Retrieves the previous summary from Redis and refines it without
+    accessing source chunks.
+
+    Args:
+        request_id: Previous request identifier
+        user_feedback: User's feedback/instructions for refinement
+
+    Returns:
+        Dictionary with refined summary and new request_id
+
+    Raises:
+        ValueError: If request_id not found
+    """
+    # Get previous request
+    previous_request = get_summary_request(request_id)
+    if not previous_request:
+        raise ValueError(f"Request not found: {request_id}")
+
+    batch_id = previous_request["batch_id"]
+    pdf_name = previous_request["pdf_name"]
+    original_summary = previous_request["summary"]
+    summary_type = previous_request["summary_type"]
+
+    with BatchContext(batch_id):
+        logger.info(f"[REFINE_BY_REQUEST] START | request_id={request_id} | pdf={pdf_name}")
+
+        if config is None:
+            config = DEFAULT_CONFIG
+
+        # Generate refinement prompt
+        prompt = get_simple_refinement_prompt(original_summary, user_feedback)
+
+        # Call LLM for refinement
+        refined_summary = _call_llm(
+            prompt,
+            config,
+            context=f"refine_{pdf_name}",
+            batch_id=batch_id
+        )
+
+        # Generate new request ID for the refined summary
+        new_request_id = generate_request_id()
+
+        # Store refined summary in Redis
+        store_summary_request(
+            request_id=new_request_id,
+            batch_id=batch_id,
+            pdf_name=pdf_name,
+            summary_type=summary_type,
+            summary=refined_summary,
+            method="refine",
+            user_feedback=user_feedback,
+            parent_request_id=request_id,
+            total_chunks=previous_request.get("total_chunks", 0),
+            total_pages=previous_request.get("total_pages", 0)
+        )
+
+        logger.info(f"[REFINE_BY_REQUEST] END | old_request={request_id} | new_request={new_request_id}")
+
+        return {
+            "request_id": new_request_id,
+            "parent_request_id": request_id,
+            "batch_id": batch_id,
+            "pdf_name": pdf_name,
+            "summary_type": summary_type,
+            "original_summary": original_summary,
+            "refined_summary": refined_summary,
+            "user_feedback": user_feedback,
+            "method": "refine"
+        }
+
+
+def regenerate_summary_by_request_id(
+    request_id: str,
+    user_feedback: str,
+    top_k: int = 20,
+    config: Optional[SummarizerConfig] = None
+) -> Dict:
+    """
+    Regenerate a summary from scratch using request_id and user feedback.
+
+    Fetches chunks from Milvus and regenerates the summary incorporating
+    the user's feedback as guidance.
+
+    Args:
+        request_id: Previous request identifier
+        user_feedback: User's feedback/guidance for regeneration
+        top_k: Number of relevant chunks to prioritize based on feedback
+        config: Optional summarizer configuration
+
+    Returns:
+        Dictionary with regenerated summary and new request_id
+
+    Raises:
+        ValueError: If request_id not found or no chunks available
+    """
+    # Get previous request
+    previous_request = get_summary_request(request_id)
+    if not previous_request:
+        raise ValueError(f"Request not found: {request_id}")
+
+    batch_id = previous_request["batch_id"]
+    pdf_name = previous_request["pdf_name"]
+    summary_type = previous_request["summary_type"]
+    original_summary = previous_request["summary"]
+
+    with BatchContext(batch_id):
+        logger.info(f"[REGENERATE_BY_REQUEST] START | request_id={request_id} | pdf={pdf_name} | top_k={top_k}")
+
+        if config is None:
+            config = DEFAULT_CONFIG
+
+        collection_name = _safe_collection_name(batch_id)
+        store = MilvusStore(collection_name)
+
+        # Get all chunks for the PDF
+        all_chunks = store.query_chunks(pdf_name=pdf_name)
+
+        if not all_chunks:
+            raise ValueError(f"No chunks found for PDF: {pdf_name}")
+
+        logger.info(f"[REGENERATE_BY_REQUEST] Retrieved {len(all_chunks)} chunks")
+
+        # Generate embedding for user feedback to find relevant chunks
+        feedback_with_prefix = f"query: {user_feedback}"
+        feedback_embedding = embed_passages([feedback_with_prefix])[0]
+
+        # Search for relevant chunks
+        search_results = store.search(feedback_embedding, k=top_k)
+
+        # Get relevant chunk IDs
+        relevant_chunk_ids = set()
+        if search_results and len(search_results) > 0:
+            for hit in search_results[0]:
+                entity = hit.entity
+                if entity.get("pdf_name") == pdf_name:
+                    chunk_id = entity.get("chunk_id")
+                    if chunk_id:
+                        relevant_chunk_ids.add(chunk_id)
+
+        logger.info(f"[REGENERATE_BY_REQUEST] Found {len(relevant_chunk_ids)} relevant chunks based on feedback")
+
+        # Prepare chunks text - prioritize relevant chunks
+        relevant_texts = []
+        other_texts = []
+
+        for chunk in all_chunks:
+            chunk_text = chunk.get("text", "")
+            page_no = chunk.get("page_no", 0)
+            chunk_id = chunk.get("chunk_id", "")
+
+            formatted_text = f"[Page {page_no}]: {chunk_text}"
+
+            if chunk_id in relevant_chunk_ids:
+                relevant_texts.append(formatted_text)
+            else:
+                other_texts.append(formatted_text)
+
+        # Combine texts - relevant first, then others
+        all_texts = relevant_texts + other_texts
+        combined_text = "\n\n".join(all_texts)
+
+        # Generate regeneration prompt
+        prompt = get_regeneration_prompt(
+            document_text=combined_text,
+            user_feedback=user_feedback,
+            summary_type=summary_type,
+            previous_summary=original_summary
+        )
+
+        # Call LLM for regeneration
+        regenerated_summary = _call_llm(
+            prompt,
+            config,
+            context=f"regenerate_{pdf_name}",
+            batch_id=batch_id
+        )
+
+        # Generate new request ID
+        new_request_id = generate_request_id()
+
+        # Store regenerated summary in Redis
+        store_summary_request(
+            request_id=new_request_id,
+            batch_id=batch_id,
+            pdf_name=pdf_name,
+            summary_type=summary_type,
+            summary=regenerated_summary,
+            method="regenerate",
+            user_feedback=user_feedback,
+            parent_request_id=request_id,
+            chunks_used=len(all_chunks),
+            total_chunks=len(all_chunks),
+            total_pages=len(set(c.get("page_no", 0) for c in all_chunks)),
+            additional_metadata={
+                "relevant_chunks": len(relevant_chunk_ids),
+                "top_k": top_k
+            }
+        )
+
+        logger.info(f"[REGENERATE_BY_REQUEST] END | old_request={request_id} | new_request={new_request_id}")
+
+        return {
+            "request_id": new_request_id,
+            "parent_request_id": request_id,
+            "batch_id": batch_id,
+            "pdf_name": pdf_name,
+            "summary_type": summary_type,
+            "previous_summary": original_summary,
+            "regenerated_summary": regenerated_summary,
+            "user_feedback": user_feedback,
+            "method": "regenerate",
+            "chunks_used": len(all_chunks),
+            "relevant_chunks": len(relevant_chunk_ids)
+        }
+
+
+def get_request_details(request_id: str) -> Optional[Dict]:
+    """
+    Get details of a summary request.
+
+    Args:
+        request_id: Request identifier
+
+    Returns:
+        Request details or None if not found
+    """
+    return get_summary_request(request_id)
+
+
+def delete_request(request_id: str) -> bool:
+    """
+    Delete a summary request.
+
+    Args:
+        request_id: Request identifier
+
+    Returns:
+        True if deleted, False if not found
+    """
+    return delete_summary_request(request_id)
+
+
+def get_summary_history(
+    batch_id: str,
+    pdf_name: Optional[str] = None,
+    limit: int = 10
+) -> List[Dict]:
+    """
+    Get summary request history for a batch/PDF.
+
+    Args:
+        batch_id: Batch identifier
+        pdf_name: Optional PDF name filter
+        limit: Maximum number of requests to return
+
+    Returns:
+        List of request summaries (without full text)
+    """
+    requests = get_request_history(batch_id, pdf_name, limit)
+
+    # Return simplified version without full summary text
+    return [
+        {
+            "request_id": r["request_id"],
+            "batch_id": r["batch_id"],
+            "pdf_name": r["pdf_name"],
+            "summary_type": r["summary_type"],
+            "method": r["method"],
+            "created_at": r["created_at"],
+            "parent_request_id": r.get("parent_request_id"),
+            "user_feedback": r.get("user_feedback"),
+            "summary_preview": r["summary"][:200] + "..." if len(r["summary"]) > 200 else r["summary"]
+        }
+        for r in requests
+    ]
