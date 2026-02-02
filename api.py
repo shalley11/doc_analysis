@@ -3,7 +3,7 @@ from enum import Enum
 import uuid
 import shutil
 
-from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect, Query, HTTPException, status
+from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect, Query, HTTPException, status, Path
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field
 
@@ -574,7 +574,7 @@ Connect to WebSocket `/ws/pdf/{batch_id}` to receive real-time processing update
 """,
 )
 def upload_pdfs(
-    files: List[UploadFile] = Field(..., description="PDF files to upload (max 5)"),
+    files: List[UploadFile],
     start_page: Optional[int] = Query(
         None,
         description="Start page (1-indexed, inclusive). Process from this page onwards.",
@@ -686,7 +686,7 @@ Each module includes:
 """,
 )
 def job_status(
-    batch_id: str = Field(
+    batch_id: str = Path(
         ...,
         description="Unique batch identifier returned from /upload-pdfs",
         example="550e8400-e29b-41d4-a716-446655440000"
@@ -947,7 +947,7 @@ being processed will not appear in this list.
 """,
 )
 def get_pdfs_in_batch(
-    batch_id: str = Field(
+    batch_id: str = Path(
         ...,
         description="Batch identifier from the upload response",
         example="550e8400-e29b-41d4-a716-446655440000"
