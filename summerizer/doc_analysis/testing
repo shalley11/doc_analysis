@@ -1,0 +1,135 @@
+{
+  "batch_id": "0b39117d-ba7f-4fb0-906b-1bc5e19e8f95",
+  "status": "processing",
+  "created_at": 1769599056.013229,
+  "updated_at": 1769599067.0288444,
+  "document_processing": {
+    "status": "processing",
+    "progress": 57,
+    "current_stage": "vision_images",
+    "stages": {
+      "queued": {
+        "status": "completed",
+        "started_at": 1769599056.0132442,
+        "completed_at": 1769599056.0132444,
+        "details": null
+      },
+      "extraction": {
+        "status": "completed",
+        "started_at": 1769599063.1308565,
+        "completed_at": 1769599064.2222652,
+        "details": "Extracted 103 elements from 1 PDFs"
+      },
+      "chunking": {
+        "status": "completed",
+        "started_at": null,
+        "completed_at": 1769599064.2230291,
+        "details": "Created 8 chunks"
+      },
+      "vision_tables": {
+        "status": "skipped",
+        "started_at": null,
+        "completed_at": null,
+        "details": "No table images found"
+      },
+      "vision_images": {
+        "status": "in_progress",
+        "started_at": 1769599067.0288432,
+        "completed_at": null,
+        "details": "Processing 3 images"
+      },
+      "embedding": {
+        "status": "pending",
+        "started_at": null,
+        "completed_at": null,
+        "details": null
+      },
+      "indexing": {
+        "status": "pending",
+        "started_at": null,
+        "completed_at": null,
+        "details": null
+      },
+      "completed": {
+        "status": "pending",
+        "started_at": null,
+        "completed_at": null,
+        "details": null
+      }
+    },
+    "stats": {
+      "total_pdfs": 1,
+      "total_pages": 0,
+      "total_elements": 103,
+      "total_chunks": 8,
+      "tables_found": 0,
+      "tables_processed": 0,
+      "images_found": 0,
+      "images_processed": 0,
+      "embeddings_generated": 0
+    },
+    "pdfs": {
+      "pdf_1": {
+        "name": "test_image2.pdf",
+        "status": "completed",
+        "pages": 0,
+        "elements": 103,
+        "chunks": 8,
+        "tables": 0,
+        "images": 0,
+        "error": null
+      }
+    }
+  },
+  "summarization": {
+    "status": "pending",
+    "progress": 0,
+    "current_stage": "pending",
+    "stages": {
+      "pending": {
+        "status": "pending",
+        "started_at": null,
+        "completed_at": null,
+        "details": null
+      },
+      "fetching_chunks": {
+        "status": "pending",
+        "started_at": null,
+        "completed_at": null,
+        "details": null
+      },
+      "batch_summarizing": {
+        "status": "pending",
+        "started_at": null,
+        "completed_at": null,
+        "details": null
+      },
+      "combining": {
+        "status": "pending",
+        "started_at": null,
+        "completed_at": null,
+        "details": null
+      },
+      "storing": {
+        "status": "pending",
+        "started_at": null,
+        "completed_at": null,
+        "details": null
+      },
+      "completed": {
+        "status": "pending",
+        "started_at": null,
+        "completed_at": null,
+        "details": null
+      }
+    },
+    "stats": {
+      "total_chunks_processed": 0,
+      "batch_count": 0,
+      "batches_completed": 0,
+      "summaries_generated": 0,
+      "cached_summaries_used": 0
+    },
+    "summaries": {}
+  }
+}
