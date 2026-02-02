@@ -226,7 +226,57 @@ curl "http://localhost:8000/summary/pdf?batch_id=550e8400&pdf_name=document1.pdf
 curl "http://localhost:8000/summary/all?batch_id=550e8400&summary_type=detailed"
 ```
 
-### Refine Summary
+### Request-Based Summary Workflow (Recommended)
+
+The request-based workflow tracks each summary with a unique `request_id` for easy refinement and regeneration.
+
+#### Step 1: Generate Summary with Request ID
+
+```bash
+curl "http://localhost:8000/summary/generate?batch_id=550e8400&pdf_name=document1.pdf&summary_type=detailed"
+```
+
+Response:
+```json
+{
+  "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "batch_id": "550e8400-e29b-41d4-a716-446655440000",
+  "pdf_name": "document1.pdf",
+  "summary": "This document provides...",
+  "method": "hierarchical"
+}
+```
+
+#### Step 2: Refine Summary (Using Previous Summary Only)
+
+```bash
+curl -X POST "http://localhost:8000/summary/request/refine" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "user_feedback": "Make it more concise and use bullet points"
+  }'
+```
+
+#### Step 3: Regenerate Summary (Fetches from Milvus)
+
+```bash
+curl -X POST "http://localhost:8000/summary/request/regenerate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "user_feedback": "Focus on financial metrics and risk factors",
+    "top_k": 20
+  }'
+```
+
+#### View Request History
+
+```bash
+curl "http://localhost:8000/summary/history/550e8400?pdf_name=document1.pdf&limit=10"
+```
+
+### Legacy Refine Summary
 
 ```bash
 curl -X POST "http://localhost:8000/summary/refine/contextual" \
@@ -272,8 +322,14 @@ Access interactive API documentation:
 | GET | `/summary/pdfs/{batch_id}` | List PDFs in batch |
 | GET | `/summary/pdf` | Generate PDF summary |
 | GET | `/summary/all` | Generate combined summary |
-| POST | `/summary/refine/simple` | Refine summary (feedback only) |
-| POST | `/summary/refine/contextual` | Refine summary (with context) |
+| GET | `/summary/generate` | Generate summary with request_id |
+| POST | `/summary/request/refine` | Refine by request_id + feedback |
+| POST | `/summary/request/regenerate` | Regenerate from Milvus + feedback |
+| GET | `/summary/request/{id}` | Get request details |
+| DELETE | `/summary/request/{id}` | Delete request |
+| GET | `/summary/history/{batch_id}` | Get request history |
+| POST | `/summary/refine/simple` | Legacy: Refine (feedback only) |
+| POST | `/summary/refine/contextual` | Legacy: Refine (with context) |
 | GET | `/ws/stats` | WebSocket statistics |
 | WS | `/ws/pdf/{batch_id}` | PDF processing updates |
 | WS | `/ws/summary/{batch_id}` | Summarization updates |
