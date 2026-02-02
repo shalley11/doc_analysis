@@ -1,0 +1,143 @@
+{
+  "_comment": "POC Debug Output - Remove in PROD",
+  "batch_id": "e84de266-d333-407c-9e1c-67b33fa5dc26",
+  "total_chunks": 8,
+  "chunks": [
+    {
+      "chunk_id": "61f41ad7b6e080e1",
+      "text": "[Image 1]",
+      "page_no": 1,
+      "pdf_id": "pdf_1",
+      "pdf_name": "test_images.pdf",
+      "content_type": "image",
+      "chunk_seq": 1,
+      "word_count": 2,
+      "image_path": "/tmp/doc_images/image_pdf_1_1_b5b57c8f.jpeg",
+      "image_summary": "",
+      "bbox": [
+        441.5500183105469,
+        75.4000244140625,
+        738.2870483398438,
+        281.2500305175781
+      ]
+    },
+    {
+      "chunk_id": "2f02ca424169cda0",
+      "text": "DDDDDooooonnnnnaaaaalllllddddd PPPPPrrrrriiiiiccccceeeee MMMMMeeeeedddddiiiiiuuuuummmmm SSSSSeeeeecccccuuuuurrrrriiiiitttttyyyyy FFFFFaaaaaccccciiiiillllliiiiitttttyyyyy DDDDDaaaaavvvvviiiiiddddd MMMMMcccccCCCCCaaaaauuuuullllleeeeeyyyyy, Warden SSSSSeeeeerrrrrgggggiiiiiooooo DDDDDeeeeeSSSSSooooouuuuusssssaaaaarrrrrooooosssssaaaaa,,,,, Deputy Warden Opened: 1932 (as reformatory for men) Closed: 1992 (due to opening of John J. Moran Facility) Reopened: 1997 (as Donald Price Facility) Average Facility Population: 345 (FY’09) Operational Facility Capacity (FY ’09): 324 Annual Cost Per Offender (FY ’09):$53,255",
+      "page_no": 1,
+      "pdf_id": "pdf_1",
+      "pdf_name": "test_images.pdf",
+      "content_type": "text",
+      "chunk_seq": 2,
+      "word_count": 51,
+      "bbox": [
+        444.45010000000036,
+        289.74,
+        741.39,
+        544.476
+      ]
+    },
+    {
+      "chunk_id": "a0dbef6acad21916",
+      "text": "[Image 2]",
+      "page_no": 2,
+      "pdf_id": "pdf_1",
+      "pdf_name": "test_images.pdf",
+      "content_type": "image",
+      "chunk_seq": 3,
+      "word_count": 2,
+      "image_path": "/tmp/doc_images/image_pdf_1_2_83a1fcf6.jpeg",
+      "image_summary": "",
+      "bbox": [
+        36.00001525878906,
+        53.99998474121094,
+        201.3500213623047,
+        165.39999389648438
+      ]
+    },
+    {
+      "chunk_id": "4acb333eaff1be57",
+      "text": "The Donald Price Facility was A VAILABLE P ROGRAMS constructed in 1929 and opened Academic",
+      "page_no": 2,
+      "pdf_id": "pdf_1",
+      "pdf_name": "test_images.pdf",
+      "content_type": "text",
+      "chunk_seq": 4,
+      "word_count": 15,
+      "bbox": [
+        213.36,
+        54.875999999999976,
+        547.91962,
+        88.65599999999995
+      ]
+    },
+    {
+      "chunk_id": "b48a1213eb6ba5bf",
+      "text": "[Image 3]",
+      "page_no": 2,
+      "pdf_id": "pdf_1",
+      "pdf_name": "test_images.pdf",
+      "content_type": "image",
+      "chunk_seq": 5,
+      "word_count": 2,
+      "image_path": "/tmp/doc_images/image_pdf_1_3_b6b12d2b.jpeg",
+      "image_summary": "",
+      "bbox": [
+        547.2999877929688,
+        77.75001525878906,
+        720.1288452148438,
+        182.25
+      ]
+    },
+    {
+      "chunk_id": "6f434f7b77b16a46",
+      "text": "in 1932. It was originally Adult Basic designed and first used to house Education (ABE), youthful offenders. The General Education building closed in 1992 when Development the John J. Moran Medium (GED), Computer Security Facility was built and An aerial view of the Price Facility Literacy, Special was reopened as the Donald Education, Title I Price Medium Security Facility Guest speaker Andres Idarraga addresses Remedial Reading & inmates receiving degrees and certificates in the for sentenced males in 1997. It is named for Correctional Officer Math, Post June 2008 Recognition Ceremony held by the Donald Price, killed in the line of duty in 1973. Secondary Program/ Education Unit. CCRI, College CLEP Testing M ISSION S TATEMENT",
+      "page_no": 2,
+      "pdf_id": "pdf_1",
+      "pdf_name": "test_images.pdf",
+      "content_type": "text",
+      "chunk_seq": 6,
+      "word_count": 116,
+      "bbox": [
+        36.0,
+        83.67599999999993,
+        720.052,
+        273.642
+      ]
+    },
+    {
+      "chunk_id": "5627875c47d72f87",
+      "text": "[Image 4]",
+      "page_no": 2,
+      "pdf_id": "pdf_1",
+      "pdf_name": "test_images.pdf",
+      "content_type": "image",
+      "chunk_seq": 7,
+      "word_count": 2,
+      "image_path": "/tmp/doc_images/image_pdf_1_4_04d1b300.jpeg",
+      "image_summary": "",
+      "bbox": [
+        234.55001831054688,
+        264.4000244140625,
+        360.062744140625,
+        366.20001220703125
+      ]
+    },
+    {
+      "chunk_id": "a9a73c6c4b99aaa6",
+      "text": "Vocational/Industrial To provide clean, safe, secure, and Carpentry Shop humane housing for inmates assigned by the Department of Corrections’ Classification Treatment/Rehabilitative process. Parenting education, religious services, Anger Management class, Spanish and English Spectrum (drug treatment) Through staff interaction and Many inmates take advantage of Program, domestic violence counseling, Alcoholics programming, to provide educational opportunities in the facility. Anonymous, Narcotics Anonymous, health education, art, opportunities for inmates to Amer I Can program. develop usable skills in order to explore their own potential for becoming law-abiding productive citizens of the community. To screen the behavior of inmates, to allow for further classification to more appropriate levels of confinement consistent with public safety. Through team effort and continuous training, to achieve a high level of professionalism which will allow staff to be more effective role models in their interactions with inmates.",
+      "page_no": 2,
+      "pdf_id": "pdf_1",
+      "pdf_name": "test_images.pdf",
+      "content_type": "text",
+      "chunk_seq": 8,
+      "word_count": 138,
+      "bbox": [
+        54.0,
+        278.25599999999974,
+        712.3524,
+        558.6959999999999
+      ]
+    }
+  ]
+}
