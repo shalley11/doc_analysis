@@ -10,9 +10,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: doc-analysis-api
+    network_mode: host
     command: uvicorn doc_analysis.api:app --host 0.0.0.0 --port 8000 --reload
-    ports:
-      - "8000:8000"
     environment:
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
@@ -24,8 +23,23 @@ services:
       - SUMMARY_MODEL=${SUMMARY_MODEL:-gemma-3-12b-it}
     volumes:
       - /tmp/doc_images:/tmp/doc_images
-      - ./summerizer:/app/summerizer  # Editable source code
-      - ./models:/app/models          # Editable models
+      # Mount source code for live editing
+      - ./api.py:/app/doc_analysis/api.py
+      - ./config.py:/app/doc_analysis/config.py
+      - ./logging_config.py:/app/doc_analysis/logging_config.py
+      - ./chunking:/app/doc_analysis/chunking
+      - ./cleanup:/app/doc_analysis/cleanup
+      - ./embedding:/app/doc_analysis/embedding
+      - ./jobs:/app/doc_analysis/jobs
+      - ./pdf:/app/doc_analysis/pdf
+      - ./qa:/app/doc_analysis/qa
+      - ./queues:/app/doc_analysis/queues
+      - ./realtime:/app/doc_analysis/realtime
+      - ./summarization:/app/doc_analysis/summarization
+      - ./vector_store:/app/doc_analysis/vector_store
+      - ./vision:/app/doc_analysis/vision
+      - ./workers:/app/doc_analysis/workers
+      - ./models:/app/models
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
@@ -52,8 +66,23 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
     volumes:
       - /tmp/doc_images:/tmp/doc_images
-      - ./summerizer:/app/summerizer  # Editable source code
-      - ./models:/app/models          # Editable models
+      # Mount source code for live editing
+      - ./api.py:/app/doc_analysis/api.py
+      - ./config.py:/app/doc_analysis/config.py
+      - ./logging_config.py:/app/doc_analysis/logging_config.py
+      - ./chunking:/app/doc_analysis/chunking
+      - ./cleanup:/app/doc_analysis/cleanup
+      - ./embedding:/app/doc_analysis/embedding
+      - ./jobs:/app/doc_analysis/jobs
+      - ./pdf:/app/doc_analysis/pdf
+      - ./qa:/app/doc_analysis/qa
+      - ./queues:/app/doc_analysis/queues
+      - ./realtime:/app/doc_analysis/realtime
+      - ./summarization:/app/doc_analysis/summarization
+      - ./vector_store:/app/doc_analysis/vector_store
+      - ./vision:/app/doc_analysis/vision
+      - ./workers:/app/doc_analysis/workers
+      - ./models:/app/models
     restart: unless-stopped
     deploy:
       resources:

@@ -1,8 +1,12 @@
+import os
 from dataclasses import dataclass
 
 E5_MAX_WORDS = 500
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
+# LLM Backend settings
+LLM_BACKEND = os.environ.get("LLM_BACKEND", "ollama")  # "ollama" or "vllm"
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
+VLLM_URL = os.environ.get("VLLM_URL", "http://localhost:8000")
 VISION_MODEL_POC = "gemma3:4b"
 
 VISION_MODEL_PROD = "gemma3-12b"
@@ -28,7 +32,7 @@ VISION_BATCH_SIZE = 3        # Number of parallel vision requests
 VISION_TIMEOUT = 900         # 15 minutes timeout per image
 
 # Summarization settings
-SUMMARY_MODEL = "gemma3:4b"  # Model for text summarization
+SUMMARY_MODEL = os.environ.get("SUMMARY_MODEL", "gemma3:4b")  # Model for text summarization
 SUMMARY_TIMEOUT = 300  # 5 minutes timeout for summary generation
 
 # Hierarchical summarization settings
@@ -51,8 +55,15 @@ ASYNC_REDUCE_GROUP_SIZE = 4         # Number of summaries to combine per reduce 
 SUMMARY_STORAGE_MODE = "hybrid"
 
 # Redis settings
-REDIS_HOST = "localhost"
-REDIS_PORT = 6379
+REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
+
+# Milvus settings
+MILVUS_HOST = os.environ.get("MILVUS_HOST", "localhost")
+MILVUS_PORT = int(os.environ.get("MILVUS_PORT", 19530))
+
+# Model settings
+E5_MODEL_PATH = os.environ.get("E5_MODEL_PATH", "intfloat/e5-large-v2")
 
 # Summary request tracking
 REQUEST_TTL_SECONDS = 2 * 3600  # 2 hours TTL for summary requests

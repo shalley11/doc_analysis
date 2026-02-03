@@ -15,12 +15,29 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY summerizer/ ./summerizer/
+# Copy application code to doc_analysis package
+COPY api.py config.py logging_config.py openapi.yaml ./doc_analysis/
+COPY chunking/ ./doc_analysis/chunking/
+COPY cleanup/ ./doc_analysis/cleanup/
+COPY embedding/ ./doc_analysis/embedding/
+COPY jobs/ ./doc_analysis/jobs/
+COPY pdf/ ./doc_analysis/pdf/
+COPY qa/ ./doc_analysis/qa/
+COPY queues/ ./doc_analysis/queues/
+COPY realtime/ ./doc_analysis/realtime/
+COPY summarization/ ./doc_analysis/summarization/
+COPY vector_store/ ./doc_analysis/vector_store/
+COPY vision/ ./doc_analysis/vision/
+COPY workers/ ./doc_analysis/workers/
+
+# Copy models
 COPY models/ ./models/
 
+# Create __init__.py for doc_analysis package
+RUN touch ./doc_analysis/__init__.py
+
 # Set environment variables
-ENV PYTHONPATH=/app/summerizer
+ENV PYTHONPATH=/app
 ENV REDIS_HOST=redis
 ENV MILVUS_HOST=milvus-standalone
 ENV MILVUS_PORT=19530

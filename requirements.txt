@@ -24,6 +24,7 @@ rq>=1.15.0
 
 # HTTP Client
 requests>=2.31.0
+aiohttp>=3.9.0
 
 # Async Redis (for pub/sub)
 redis[hiredis]>=5.0.0

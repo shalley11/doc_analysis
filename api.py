@@ -547,13 +547,14 @@ Check the health status of the API and its dependent services.
 def health_check():
     """Check API and dependent services health."""
     import redis
+    from . import config
 
     services = {}
     overall_healthy = True
 
     # Check Redis
     try:
-        r = redis.Redis(host='localhost', port=6379, socket_timeout=2)
+        r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, socket_timeout=2)
         r.ping()
         services["redis"] = "connected"
     except Exception:
@@ -563,24 +564,25 @@ def health_check():
     # Check Milvus (basic connectivity)
     try:
         from pymilvus import connections
-        connections.connect(alias="health_check", host="localhost", port="19530", timeout=2)
+        connections.connect(alias="health_check", host=config.MILVUS_HOST, port=str(config.MILVUS_PORT), timeout=2)
         connections.disconnect(alias="health_check")
         services["milvus"] = "connected"
     except Exception:
         services["milvus"] = "disconnected"
         overall_healthy = False
 
-    # Check Ollama
+    # Check LLM backend (Ollama or vLLM)
     try:
         import requests
-        resp = requests.get("http://localhost:11434/api/tags", timeout=2)
-        if resp.status_code == 200:
-            services["ollama"] = "available"
+        if config.LLM_BACKEND == "vllm":
+            resp = requests.get(f"{config.VLLM_URL}/health", timeout=2)
+            services["llm"] = "available" if resp.status_code == 200 else "unavailable"
         else:
-            services["ollama"] = "unavailable"
+            resp = requests.get(config.OLLAMA_URL.replace("/api/generate", "/api/tags"), timeout=2)
+            services["ollama"] = "available" if resp.status_code == 200 else "unavailable"
     except Exception:
-        services["ollama"] = "unavailable"
-        # Ollama is optional, don't mark as unhealthy
+        services["llm" if config.LLM_BACKEND == "vllm" else "ollama"] = "unavailable"
+        # LLM is optional, don't mark as unhealthy
 
     return {
         "status": "healthy" if overall_healthy else "degraded",
