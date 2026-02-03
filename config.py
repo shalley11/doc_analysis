@@ -38,6 +38,13 @@ SUMMARY_INTERMEDIATE_WORDS = 300    # Target words for intermediate summaries
 SUMMARY_FINAL_WORDS = 500           # Target words for final summary
 SUMMARY_REDIS_TTL = 3600            # 1 hour TTL for intermediate summaries in Redis
 
+# Async/Parallel processing settings
+ASYNC_MAX_CONCURRENT_BATCHES = 8    # Max concurrent batch summarization requests
+ASYNC_MAX_CONCURRENT_REDUCE = 4     # Max concurrent reduce phase requests
+ASYNC_LLM_NUM_PREDICT = 2000        # Max tokens for LLM to generate
+ASYNC_MAX_REDUCE_LEVELS = 5         # Max hierarchical reduce levels before forcing final
+ASYNC_REDUCE_GROUP_SIZE = 4         # Number of summaries to combine per reduce group
+
 # Summary storage mode: "hybrid" (Redis + Milvus) or "redis_only"
 # - hybrid: Store intermediate in Redis, final summary in Milvus (searchable)
 # - redis_only: Store all summaries in Redis only (temporary, not searchable)

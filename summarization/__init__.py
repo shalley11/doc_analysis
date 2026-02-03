@@ -10,7 +10,10 @@ from doc_analysis.summarization.summary_service import (
 from doc_analysis.summarization.hierarchical_summarizer import (
     summarize_chunks,
     summarize_multiple_pdfs,
-    SummarizerConfig
+    SummarizerConfig,
+    # Async/parallel versions for high throughput
+    summarize_chunks_async,
+    summarize_chunks_parallel,
 )
 from doc_analysis.summarization.summary_store import (
     get_final_summary,
@@ -26,10 +29,13 @@ __all__ = [
     "list_pdfs_in_batch",
     "get_cached_summary",
     "SummaryType",
-    # Hierarchical summarizer
+    # Hierarchical summarizer (sync)
     "summarize_chunks",
     "summarize_multiple_pdfs",
     "SummarizerConfig",
+    # Hierarchical summarizer (async/parallel)
+    "summarize_chunks_async",
+    "summarize_chunks_parallel",
     # Storage
     "get_final_summary",
     "is_summary_cached",
