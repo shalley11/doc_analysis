@@ -1,0 +1,1885 @@
+openapi: 3.1.0
+info:
+  title: Document Analysis API
+  version: 1.0.0
+  description: |
+    ## Overview
+
+    The **Document Analysis API** is a comprehensive PDF processing and summarization system that enables:
+
+    - **PDF Upload & Processing**: Upload multiple PDFs for extraction, chunking, and indexing
+    - **Semantic Search**: Store document chunks in Milvus vector database for similarity search
+    - **AI-Powered Summarization**: Generate brief, detailed, or bullet-point summaries
+    - **Summary Refinement**: Iteratively refine summaries with user feedback
+    - **Real-time Updates**: WebSocket connections for live processing status
+
+    ## Architecture
+
+    ```
+    PDF Upload → Extract → Chunk → Embed (E5-large) → Index (Milvus)
+                                        ↓
+                                Vision Processing (Ollama)
+                                        ↓
+                                Summarization (LLM)
+    ```
+
+    ## Key Features
+
+    - **Batch Processing**: Upload up to 5 PDFs per batch
+    - **Page Limit Validation**: Maximum 50 pages per PDF (configurable)
+    - **Page Range Selection**: Process specific pages only
+    - **Hierarchical Summarization**: Map-reduce pattern for large documents
+    - **Hybrid Storage**: Redis for caching, Milvus for persistence
+    - **Real-time Events**: WebSocket notifications for all processing stages
+
+    ## Authentication
+
+    Currently, no authentication is required. All endpoints are publicly accessible.
+
+    ## Rate Limits
+
+    - Maximum 5 PDFs per upload batch
+    - Maximum 50 pages per PDF (configurable)
+    - 30-minute timeout per processing job
+    - 24-hour data retention (configurable)
+  contact:
+    name: API Support
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+
+tags:
+  - name: System
+    description: System health, statistics, and monitoring endpoints.
+  - name: PDF Processing
+    description: Upload and process PDF documents. Handles extraction, chunking, embedding, and indexing.
+  - name: Job Status
+    description: Monitor processing job status and progress. Supports filtering by module.
+  - name: Summarization
+    description: Generate AI-powered summaries for individual PDFs or entire batches.
+  - name: Summary Refinement
+    description: Iteratively refine summaries using user feedback with optional context retrieval.
+  - name: WebSocket
+    description: Real-time event streams for PDF processing and summarization updates.
+
+paths:
+  /:
+    get:
+      tags:
+        - System
+      summary: API information
+      description: Get basic information about the API and links to documentation.
+      operationId: getApiInfo
+      responses:
+        '200':
+          description: API information retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIInfoResponse'
+              example:
+                name: Document Analysis API
+                version: 1.0.0
+                description: PDF processing and AI-powered summarization system
+                docs_url: /docs
+                redoc_url: /redoc
+
+  /health:
+    get:
+      tags:
+        - System
+      summary: Health check
+      description: |
+        Check the health status of the API and its dependent services.
+
+        ## Services Checked
+
+        | Service | Description |
+        |---------|-------------|
+        | **Redis** | Job queue, caching, and pub/sub messaging |
+        | **Milvus** | Vector database for document chunks |
+        | **Ollama** | Vision and language models |
+
+        ## Response Status Values
+
+        - `healthy`: All services operational
+        - `degraded`: Some services unavailable but core functionality works
+        - `unhealthy`: Critical services down
+
+        ## Use Cases
+
+        - Load balancer health probes
+        - Kubernetes liveness/readiness probes
+        - Monitoring dashboards
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Health status retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: healthy
+                version: 1.0.0
+                services:
+                  redis: connected
+                  milvus: connected
+                  ollama: available
+
+  /ws/stats:
+    get:
+      tags:
+        - System
+      summary: Get WebSocket connection statistics
+      description: |
+        Retrieve statistics about active WebSocket connections.
+
+        Useful for monitoring and debugging real-time update connections.
+
+        ## Response Fields
+
+        - **pdf_connections**: Number of clients listening for PDF processing updates
+        - **summary_connections**: Number of clients listening for summarization updates
+        - **total_connections**: Combined total of all active connections
+        - **batches_with_connections**: List of batch IDs that have active listeners
+      operationId: getWebSocketStats
+      responses:
+        '200':
+          description: WebSocket statistics retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebSocketStatsResponse'
+              example:
+                pdf_connections: 5
+                summary_connections: 3
+                total_connections: 8
+                batches_with_connections:
+                  - batch-1
+                  - batch-2
+
+  /upload-pdfs:
+    post:
+      tags:
+        - PDF Processing
+      summary: Upload PDF documents for processing
+      description: |
+        Upload one or more PDF documents for extraction, chunking, embedding, and indexing.
+
+        ## Processing Pipeline
+
+        1. **Extraction**: Text, tables, and images are extracted from each page
+        2. **Chunking**: Content is semantically chunked with overlap for context preservation
+        3. **Vision Processing**: Tables and images are analyzed using vision models
+        4. **Embedding**: E5-large model generates 1024-dimensional embeddings
+        5. **Indexing**: Chunks are stored in Milvus vector database
+
+        ## Limits
+
+        - Maximum **5 PDFs** per batch
+        - Maximum **50 pages** per PDF (configurable)
+        - Processing timeout: **30 minutes**
+        - Data retention: **24 hours** (configurable)
+
+        ## Page Validation
+
+        Each uploaded PDF is validated for page count. PDFs exceeding the maximum page limit
+        will be **rejected** and not processed. The response will include details about rejected
+        files in the `rejected_files` field.
+
+        ## Page Range Filtering
+
+        Optionally specify `start_page` and `end_page` to process only a subset of pages.
+        Pages are 1-indexed and inclusive on both ends.
+
+        ## Real-time Updates
+
+        Connect to WebSocket `/ws/pdf/{batch_id}` to receive real-time processing updates.
+      operationId: uploadPdfs
+      parameters:
+        - name: start_page
+          in: query
+          description: Start page (1-indexed, inclusive). Process from this page onwards.
+          schema:
+            type: integer
+            minimum: 1
+          example: 1
+        - name: end_page
+          in: query
+          description: End page (1-indexed, inclusive). Process up to and including this page.
+          schema:
+            type: integer
+            minimum: 1
+          example: 50
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - files
+              properties:
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: PDF files to upload (max 5 files, max 50 pages each)
+      responses:
+        '200':
+          description: PDFs successfully uploaded and queued for processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+              examples:
+                all_accepted:
+                  summary: All PDFs accepted
+                  value:
+                    batch_id: 550e8400-e29b-41d4-a716-446655440000
+                    pdf_count: 2
+                    status: queued
+                    page_range:
+                      start: 1
+                      end: 50
+                some_rejected:
+                  summary: Some PDFs rejected due to page limit
+                  value:
+                    batch_id: 550e8400-e29b-41d4-a716-446655440000
+                    pdf_count: 2
+                    status: queued
+                    rejected_files:
+                      - filename: large_report.pdf
+                        pages: 75
+                        reason: Exceeds maximum of 50 pages
+                    warning: 1 PDF(s) were rejected and not processed
+        '400':
+          description: Upload validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadErrorResponse'
+              examples:
+                too_many_files:
+                  summary: Too many files
+                  value:
+                    error: Maximum 5 PDFs allowed per batch
+                all_rejected:
+                  summary: All files rejected
+                  value:
+                    error: "All 3 PDF(s) were rejected: large1.pdf (Exceeds maximum of 50 pages); large2.pdf (Exceeds maximum of 50 pages)"
+                    rejected_files:
+                      - filename: large1.pdf
+                        pages: 100
+                        reason: Exceeds maximum of 50 pages
+                      - filename: large2.pdf
+                        pages: 75
+                        reason: Exceeds maximum of 50 pages
+        '422':
+          description: Validation error in request parameters
+
+  /job-status/{batch_id}:
+    get:
+      tags:
+        - Job Status
+      summary: Get processing job status
+      description: |
+        Retrieve the current status of a document processing job.
+
+        ## Modules
+
+        The system tracks two independent processing modules:
+
+        ### 1. Document Processing (`document_processing`)
+        Tracks PDF extraction, chunking, and indexing with stages:
+        - `queued` → `extraction` → `chunking` → `vision_tables` → `vision_images` → `embedding` → `indexing` → `completed`
+
+        ### 2. Summarization (`summarization`)
+        Tracks summary generation with stages:
+        - `pending` → `fetching_chunks` → `batch_summarizing` → `combining` → `storing` → `completed`
+
+        ## Filtering
+
+        Use the `module` query parameter to retrieve status for a specific module only,
+        reducing response payload size.
+
+        ## Progress Tracking
+
+        Each module includes:
+        - **stage**: Current processing stage
+        - **progress**: Percentage completion (0-100)
+        - **stats**: Detailed statistics (pages, chunks, tables, images)
+        - **error**: Error message if processing failed
+      operationId: getJobStatus
+      parameters:
+        - name: batch_id
+          in: path
+          required: true
+          description: Unique batch identifier returned from /upload-pdfs
+          schema:
+            type: string
+          example: 550e8400-e29b-41d4-a716-446655440000
+        - name: module
+          in: query
+          description: "Filter by module: document_processing or summarization"
+          schema:
+            type: string
+            enum:
+              - document_processing
+              - summarization
+          example: document_processing
+      responses:
+        '200':
+          description: Job status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatusResponse'
+              example:
+                batch_id: 550e8400-e29b-41d4-a716-446655440000
+                status: processing
+                created_at: "2024-01-15T10:30:00Z"
+                updated_at: "2024-01-15T10:35:00Z"
+                document_processing:
+                  stage: embedding
+                  progress: 75.0
+                  pdfs:
+                    report.pdf:
+                      status: completed
+                      pages: 25
+                      chunks: 48
+                  stats:
+                    total_pages: 25
+                    total_chunks: 48
+                    total_tables: 5
+                    total_images: 12
+                summarization:
+                  stage: pending
+                  progress: 0.0
+                  summaries: {}
+        '404':
+          description: Batch not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: "Job not found: invalid-batch-id"
+
+  /summary/pdfs/{batch_id}:
+    get:
+      tags:
+        - Summarization
+      summary: List PDFs in a batch
+      description: |
+        Retrieve the list of PDF filenames that have been processed and indexed for a given batch.
+
+        ## Use Case
+
+        Call this endpoint before generating summaries to:
+        - Verify which PDFs are available for summarization
+        - Get the exact filenames needed for the `/summary/pdf` endpoint
+        - Check if all expected PDFs have been indexed
+
+        ## Prerequisites
+
+        The batch must have completed the document processing stage. PDFs that are still
+        being processed will not appear in this list.
+      operationId: listPdfsInBatch
+      parameters:
+        - name: batch_id
+          in: path
+          required: true
+          description: Batch identifier from the upload response
+          schema:
+            type: string
+          example: 550e8400-e29b-41d4-a716-446655440000
+      responses:
+        '200':
+          description: List of PDFs retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PDFListResponse'
+              example:
+                batch_id: 550e8400-e29b-41d4-a716-446655440000
+                pdf_names:
+                  - annual_report.pdf
+                  - quarterly_analysis.pdf
+                count: 2
+        '404':
+          description: Batch not found or no PDFs indexed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /summary/pdf:
+    get:
+      tags:
+        - Summarization
+      summary: Generate PDF summary
+      description: |
+        Generate an AI-powered summary for one or more PDF documents.
+
+        ## Modes
+
+        ### Single PDF Mode
+        When `pdf_name` is provided, generates and returns a summary for that specific PDF.
+
+        ### All PDFs Mode
+        When `pdf_name` is omitted, generates individual summaries for **all** PDFs in the batch.
+
+        ## Summary Types
+
+        | Type | Description | Typical Length |
+        |------|-------------|----------------|
+        | `brief` | Concise overview of key points | 100-200 words |
+        | `bulletwise` | Bullet-point format with main takeaways | 10-20 bullets |
+        | `detailed` | Comprehensive summary with sections | 500-1000 words |
+        | `executive` | Executive summary for decision makers | 200-400 words |
+
+        ## Summarization Methods
+
+        The system automatically selects the optimal method:
+
+        ### Direct Method
+        - Used for small documents (< 4000 words)
+        - Single LLM call with all content
+        - Faster processing
+
+        ### Hierarchical Method (Map-Reduce)
+        - Used for large documents (> 4000 words)
+        - Batches content into groups
+        - Summarizes each batch (MAP phase)
+        - Combines batch summaries (REDUCE phase)
+        - Handles documents of any size
+
+        ## Caching
+
+        Summaries are cached for performance:
+        - **Redis**: Intermediate results (1 hour TTL)
+        - **Milvus**: Final summaries (persistent)
+
+        The `cached` field in the response indicates if a cached summary was returned.
+
+        ## Real-time Updates
+
+        Connect to `/ws/summary/{batch_id}` to receive real-time progress updates.
+      operationId: summarizePdf
+      parameters:
+        - name: batch_id
+          in: query
+          required: true
+          description: Batch identifier from the upload response
+          schema:
+            type: string
+          example: 550e8400-e29b-41d4-a716-446655440000
+        - name: pdf_name
+          in: query
+          description: PDF filename to summarize. If omitted, all PDFs are summarized individually.
+          schema:
+            type: string
+          example: annual_report.pdf
+        - name: summary_type
+          in: query
+          description: Type of summary to generate
+          schema:
+            $ref: '#/components/schemas/SummaryType'
+          example: brief
+      responses:
+        '200':
+          description: Summary generated successfully
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/SummaryResponse'
+                  - $ref: '#/components/schemas/BatchSummaryResponse'
+              examples:
+                single_pdf:
+                  summary: Single PDF summary
+                  value:
+                    batch_id: 550e8400-e29b-41d4-a716-446655440000
+                    pdf_name: report.pdf
+                    summary_type: brief
+                    summary: This document provides a comprehensive analysis of market trends and financial performance...
+                    method: hierarchical
+                    chunk_count: 48
+                    cached: false
+                    word_count: 150
+                all_pdfs:
+                  summary: All PDFs individual summaries
+                  value:
+                    batch_id: 550e8400-e29b-41d4-a716-446655440000
+                    summary_type: brief
+                    total_pdfs: 2
+                    summaries:
+                      report.pdf:
+                        batch_id: 550e8400-e29b-41d4-a716-446655440000
+                        pdf_name: report.pdf
+                        summary_type: brief
+                        summary: "Market analysis summary..."
+                        method: hierarchical
+                        chunk_count: 48
+                        cached: false
+                      analysis.pdf:
+                        batch_id: 550e8400-e29b-41d4-a716-446655440000
+                        pdf_name: analysis.pdf
+                        summary_type: brief
+                        summary: "Financial analysis summary..."
+                        method: direct
+                        chunk_count: 15
+                        cached: true
+        '404':
+          description: Batch or PDF not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Summary generation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /summary/all:
+    get:
+      tags:
+        - Summarization
+      summary: Generate combined summary for all PDFs
+      description: |
+        Generate a **unified summary** that combines content from all PDFs in the batch.
+
+        ## Difference from /summary/pdf
+
+        | Endpoint | Behavior |
+        |----------|----------|
+        | `/summary/pdf` | Individual summaries for each PDF |
+        | `/summary/all` | Single combined summary across all PDFs |
+
+        ## Use Cases
+
+        - **Multi-document analysis**: Summarize a collection of related documents
+        - **Research synthesis**: Combine findings from multiple papers
+        - **Report generation**: Create executive summary from multiple source files
+
+        ## Process
+
+        1. Retrieves all chunks from all PDFs in the batch
+        2. Generates individual PDF summaries (if not cached)
+        3. Combines all PDF summaries into a unified document summary
+        4. Identifies common themes and cross-document insights
+
+        ## Real-time Updates
+
+        Connect to `/ws/summary/{batch_id}` to receive:
+        - `multi_pdf.started` - Batch summary started
+        - `multi_pdf.pdf_started` / `multi_pdf.pdf_completed` - Per-PDF progress
+        - `multi_pdf.combining` - Final combination phase
+        - `multi_pdf.completed` - Summary ready
+      operationId: summarizeAllPdfs
+      parameters:
+        - name: batch_id
+          in: query
+          required: true
+          description: Batch identifier from the upload response
+          schema:
+            type: string
+          example: 550e8400-e29b-41d4-a716-446655440000
+        - name: summary_type
+          in: query
+          description: Type of combined summary to generate
+          schema:
+            $ref: '#/components/schemas/SummaryType'
+          example: brief
+      responses:
+        '200':
+          description: Combined summary generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SummaryResponse'
+              example:
+                batch_id: 550e8400-e29b-41d4-a716-446655440000
+                pdf_name: _combined_
+                summary_type: brief
+                summary: Across the three uploaded documents, the key findings indicate strong market growth...
+                method: multi_pdf_combine
+                chunk_count: 156
+                cached: false
+                word_count: 200
+        '404':
+          description: Batch not found or no PDFs indexed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Summary generation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /summary/generate:
+    get:
+      tags:
+        - Summarization
+      summary: Generate summary with request tracking
+      description: |
+        Generate a summary for a PDF and receive a **request_id** for future refinement or regeneration.
+
+        ## Workflow
+
+        1. **Generate**: Call this endpoint to get initial summary + `request_id`
+        2. **Refine**: Use `POST /summary/request/refine` with `request_id` + feedback
+        3. **Regenerate**: Use `POST /summary/request/regenerate` with `request_id` + feedback
+
+        ## Request Tracking
+
+        - Each request gets a unique `request_id` stored in Redis
+        - Request data includes: summary, metadata, timestamps
+        - Requests expire after 2 hours (configurable)
+        - Refinement/regeneration creates new request_id, links to parent
+
+        ## Example Flow
+
+        ```
+        Generate (request_id: abc123)
+            ↓
+        Refine with feedback (request_id: def456, parent: abc123)
+            ↓
+        Regenerate with guidance (request_id: ghi789, parent: def456)
+        ```
+
+        Each step preserves history for audit and comparison.
+      operationId: generateSummaryWithTracking
+      parameters:
+        - name: batch_id
+          in: query
+          required: true
+          description: Batch identifier
+          schema:
+            type: string
+          example: 550e8400-e29b-41d4-a716-446655440000
+        - name: pdf_name
+          in: query
+          required: true
+          description: PDF filename to summarize
+          schema:
+            type: string
+          example: report.pdf
+        - name: summary_type
+          in: query
+          description: Summary type
+          schema:
+            $ref: '#/components/schemas/SummaryType'
+          example: detailed
+        - name: use_cache
+          in: query
+          description: Use cached summary if available
+          schema:
+            type: boolean
+            default: true
+      responses:
+        '200':
+          description: Summary generated successfully with request_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SummaryWithRequestResponse'
+              example:
+                request_id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+                batch_id: 550e8400-e29b-41d4-a716-446655440000
+                pdf_name: report.pdf
+                summary_type: detailed
+                summary: This comprehensive report analyzes market trends and provides detailed financial projections...
+                method: hierarchical
+                total_chunks: 48
+                total_pages: 25
+                cached: false
+        '404':
+          description: PDF not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Generation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /summary/refine/simple:
+    post:
+      tags:
+        - Summary Refinement
+      summary: Refine summary using feedback only
+      description: |
+        Refine a summary using **only** the original summary text and user feedback.
+
+        ## Overview
+
+        This is a fast refinement option that doesn't access source documents. The LLM
+        modifies the existing summary based solely on the user's instructions.
+
+        ## Best For
+
+        | Use Case | Example Feedback |
+        |----------|------------------|
+        | **Style changes** | "Make it more formal and professional" |
+        | **Format changes** | "Convert to bullet points" |
+        | **Length adjustment** | "Condense to 3 sentences" |
+        | **Tone modification** | "Make it more accessible for non-technical readers" |
+        | **Focus shift** | "Emphasize the conclusions more" |
+
+        ## Limitations
+
+        Cannot add information not present in the original summary. For adding
+        missing details, use `/summary/refine/contextual` instead.
+
+        ## Process
+
+        ```
+        Original Summary + User Feedback → LLM → Refined Summary
+        ```
+
+        ## Cache Behavior
+
+        If `original_summary` is not provided in the request, the system will attempt
+        to retrieve it from cache using `batch_id`, `pdf_name`, and `summary_type`.
+      operationId: refineSimple
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefinementRequest'
+            example:
+              batch_id: 550e8400-e29b-41d4-a716-446655440000
+              pdf_name: annual_report.pdf
+              summary_type: detailed
+              user_feedback: Make it more concise and use bullet points for key metrics
+              user_id: user_12345
+      responses:
+        '200':
+          description: Summary refined successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefinedSummaryResponse'
+              example:
+                batch_id: 550e8400-e29b-41d4-a716-446655440000
+                pdf_name: annual_report.pdf
+                refined_summary: |
+                  Key Metrics:
+                  • Revenue: $42.5M (18% YoY growth)
+                  • Operating margin: 15.2%
+                  • Customer acquisition: +2,500 new accounts
+                refinement_type: simple
+                user_id: user_12345
+        '404':
+          description: Cached summary not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: "No cached summary found for PDF 'report.pdf' with type 'detailed'. Either generate a summary first or provide the original_summary in the request."
+        '422':
+          description: Validation error in request body
+        '500':
+          description: Refinement failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /summary/refine/contextual:
+    post:
+      tags:
+        - Summary Refinement
+      summary: Refine summary using feedback and source context
+      description: |
+        Refine a summary using the original summary, user feedback, **and** relevant source chunks
+        retrieved via semantic search.
+
+        ## Overview
+
+        This is the most powerful refinement option. It can add information that was not
+        in the original summary by retrieving relevant passages from the source document.
+
+        ## How It Works
+
+        ```
+        User Feedback
+             ↓
+        Generate Embedding (E5-large)
+             ↓
+        Vector Search in Milvus
+             ↓
+        Filter chunks for target PDF
+             ↓
+        Original Summary + Feedback + Context Chunks → LLM → Refined Summary
+        ```
+
+        ## Best For
+
+        | Use Case | Example Feedback |
+        |----------|------------------|
+        | **Adding details** | "Include more about the Q3 financial projections" |
+        | **Topic expansion** | "Elaborate on the methodology section" |
+        | **Missing info** | "Add information about risk factors" |
+        | **Specific questions** | "What were the key recommendations?" |
+        | **Factual additions** | "Include the specific metrics mentioned" |
+
+        ## Parameters
+
+        ### top_k (default: 10, max: 50)
+
+        Number of source chunks to retrieve via vector search. Higher values provide
+        more context but may:
+        - Include less relevant information
+        - Increase processing time
+        - Increase LLM token usage
+
+        **Recommendations:**
+        - `5-10`: Focused refinement on specific topics
+        - `10-20`: General enhancement with more context
+        - `20-50`: Comprehensive refinement for detailed requests
+
+        ## Response Details
+
+        The response includes information about which source chunks were used.
+      operationId: refineContextual
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContextualRefinementRequest'
+            example:
+              batch_id: 550e8400-e29b-41d4-a716-446655440000
+              pdf_name: annual_report.pdf
+              summary_type: detailed
+              user_feedback: Include more details about Q3 financial projections and risk factors
+              top_k: 15
+              user_id: user_12345
+      responses:
+        '200':
+          description: Summary refined successfully with context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextualRefinedSummaryResponse'
+              example:
+                batch_id: 550e8400-e29b-41d4-a716-446655440000
+                pdf_name: annual_report.pdf
+                refined_summary: Based on the financial data, Q3 projections show 18% revenue growth with specific risk factors including market volatility and supply chain constraints...
+                refinement_type: contextual
+                chunks_used: 8
+                chunks_detail:
+                  - page: 12
+                    type: text
+                    relevance: 0.92
+                    preview: "Financial projections for Q3 indicate..."
+                  - page: 15
+                    type: table
+                    relevance: 0.88
+                    preview: "Q3 Revenue breakdown table..."
+                user_id: user_12345
+        '404':
+          description: Cached summary not found or no relevant chunks found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error in request body
+        '500':
+          description: Refinement failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /summary/request/refine:
+    post:
+      tags:
+        - Summary Refinement
+      summary: Refine summary by request ID
+      description: |
+        Refine a previous summary using its **request_id** and user feedback.
+
+        ## How It Works
+
+        1. Retrieves previous summary from Redis using `request_id`
+        2. Applies user feedback to refine the summary
+        3. **Does NOT** access source documents (fast operation)
+        4. Creates new `request_id` for the refined result
+        5. Links to parent request for history tracking
+
+        ## Best For
+
+        - Style changes (more formal, casual, technical)
+        - Length adjustments (shorter, longer)
+        - Format changes (bullets, paragraphs)
+        - Focus shifts (emphasize different aspects)
+
+        ## Limitations
+
+        Cannot add information not present in the original summary.
+        For adding new details, use `/summary/request/regenerate` instead.
+
+        ## Request Chain
+
+        Each refinement creates a new request linked to its parent:
+        ```
+        Original (abc123) → Refined (def456) → Refined Again (ghi789)
+        ```
+      operationId: refineByRequest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefineByRequestRequest'
+            example:
+              request_id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+              user_feedback: Make it more concise and focus on financial metrics
+      responses:
+        '200':
+          description: Summary refined successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefineByRequestResponse'
+              example:
+                request_id: new-request-id-here
+                parent_request_id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+                batch_id: 550e8400-e29b-41d4-a716-446655440000
+                pdf_name: report.pdf
+                summary_type: detailed
+                original_summary: Original detailed summary text...
+                refined_summary: Refined and more concise summary focusing on financial metrics...
+                user_feedback: Make it more concise and focus on financial metrics
+                method: refine
+        '404':
+          description: Request not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Refinement failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /summary/request/regenerate:
+    post:
+      tags:
+        - Summary Refinement
+      summary: Regenerate summary by request ID
+      description: |
+        Regenerate a summary from scratch using **request_id**, user feedback, and source chunks from Milvus.
+
+        ## How It Works
+
+        1. Retrieves request metadata from Redis using `request_id`
+        2. Fetches **all chunks** for the PDF from Milvus vector database
+        3. Generates embedding for user feedback
+        4. Prioritizes chunks relevant to user's feedback (top_k)
+        5. Regenerates summary from source content with user guidance
+        6. Creates new `request_id` for the regenerated result
+
+        ## Best For
+
+        - Adding missing information
+        - Completely changing summary focus
+        - Incorporating specific details from document
+        - When refinement isn't sufficient
+
+        ## Parameters
+
+        - **top_k**: Number of chunks to prioritize based on feedback relevance (default: 20)
+          - Higher values = more context, but potentially less focused
+          - Lower values = more focused on feedback-relevant content
+
+        ## Difference from Refine
+
+        | Refine | Regenerate |
+        |--------|------------|
+        | Uses previous summary only | Fetches from Milvus |
+        | Fast (no DB access) | Slower (vector search + LLM) |
+        | Cannot add new info | Can incorporate any document content |
+        | Style/format changes | Content changes |
+      operationId: regenerateByRequest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegenerateByRequestRequest'
+            example:
+              request_id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+              user_feedback: Focus more on risk factors and include specific numbers from the financial tables
+              top_k: 20
+      responses:
+        '200':
+          description: Summary regenerated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegenerateByRequestResponse'
+              example:
+                request_id: new-request-id-here
+                parent_request_id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+                batch_id: 550e8400-e29b-41d4-a716-446655440000
+                pdf_name: report.pdf
+                summary_type: detailed
+                previous_summary: Previous summary text...
+                regenerated_summary: Completely new summary focusing on risk factors with specific financial numbers...
+                user_feedback: Focus more on risk factors and include specific numbers
+                method: regenerate
+                chunks_used: 48
+                relevant_chunks: 15
+        '404':
+          description: Request not found or no chunks
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Regeneration failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /summary/request/{request_id}:
+    get:
+      tags:
+        - Summarization
+      summary: Get request details
+      description: Retrieve details of a summary request including the full summary text and metadata.
+      operationId: getRequestDetails
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          description: Request identifier
+          schema:
+            type: string
+          example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+      responses:
+        '200':
+          description: Request details retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestDetailsResponse'
+              example:
+                request_id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+                batch_id: 550e8400-e29b-41d4-a716-446655440000
+                pdf_name: report.pdf
+                summary_type: detailed
+                summary: Full summary text here...
+                method: hierarchical
+                user_feedback: null
+                parent_request_id: null
+                created_at: "2024-01-15T10:30:00Z"
+                chunks_used: 48
+                total_chunks: 48
+                total_pages: 25
+        '404':
+          description: Request not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - Summarization
+      summary: Delete a request
+      description: Delete a summary request from Redis. This action is irreversible.
+      operationId: deleteRequest
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          description: Request identifier to delete
+          schema:
+            type: string
+          example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+      responses:
+        '200':
+          description: Request deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+              example:
+                message: Request a1b2c3d4-e5f6-7890-abcd-ef1234567890 deleted successfully
+        '404':
+          description: Request not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /summary/history/{batch_id}:
+    get:
+      tags:
+        - Summarization
+      summary: Get summary request history
+      description: |
+        Get the history of summary requests for a batch.
+
+        Returns a list of requests sorted by creation time (newest first),
+        with summary previews instead of full text.
+
+        Use this to:
+        - View all summaries generated for a batch
+        - Track refinement/regeneration chains
+        - Find specific request IDs for further operations
+      operationId: getSummaryHistory
+      parameters:
+        - name: batch_id
+          in: path
+          required: true
+          description: Batch identifier
+          schema:
+            type: string
+          example: 550e8400-e29b-41d4-a716-446655440000
+        - name: pdf_name
+          in: query
+          description: Filter by PDF name
+          schema:
+            type: string
+          example: report.pdf
+        - name: limit
+          in: query
+          description: Maximum requests to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+          example: 10
+      responses:
+        '200':
+          description: Request history retrieved
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RequestHistoryItem'
+              example:
+                - request_id: ghi789
+                  batch_id: 550e8400-e29b-41d4-a716-446655440000
+                  pdf_name: report.pdf
+                  summary_type: detailed
+                  method: refine
+                  created_at: "2024-01-15T10:45:00Z"
+                  parent_request_id: def456
+                  user_feedback: Make it shorter
+                  summary_preview: "Refined summary focusing on..."
+                - request_id: def456
+                  batch_id: 550e8400-e29b-41d4-a716-446655440000
+                  pdf_name: report.pdf
+                  summary_type: detailed
+                  method: refine
+                  created_at: "2024-01-15T10:40:00Z"
+                  parent_request_id: abc123
+                  user_feedback: Add more details
+                  summary_preview: "Enhanced summary with additional..."
+                - request_id: abc123
+                  batch_id: 550e8400-e29b-41d4-a716-446655440000
+                  pdf_name: report.pdf
+                  summary_type: detailed
+                  method: hierarchical
+                  created_at: "2024-01-15T10:30:00Z"
+                  parent_request_id: null
+                  user_feedback: null
+                  summary_preview: "This comprehensive report analyzes..."
+
+components:
+  schemas:
+    SummaryType:
+      type: string
+      enum:
+        - brief
+        - bulletwise
+        - detailed
+        - executive
+      description: |
+        Type of summary to generate:
+        - `brief`: Concise overview (100-200 words)
+        - `bulletwise`: Bullet-point format (10-20 bullets)
+        - `detailed`: Comprehensive summary (500-1000 words)
+        - `executive`: Executive summary (200-400 words)
+
+    PageRange:
+      type: object
+      description: Page range specification for PDF processing
+      properties:
+        start:
+          type: integer
+          description: Start page (1-indexed, inclusive)
+          example: 1
+        end:
+          type: integer
+          description: End page (1-indexed, inclusive)
+          example: 10
+
+    RejectedFile:
+      type: object
+      description: Information about a rejected PDF file
+      required:
+        - filename
+        - reason
+      properties:
+        filename:
+          type: string
+          description: Name of the rejected file
+        pages:
+          type: integer
+          description: Number of pages in the file (if readable)
+        reason:
+          type: string
+          description: Reason for rejection
+
+    APIInfoResponse:
+      type: object
+      required:
+        - name
+        - version
+        - description
+        - docs_url
+        - redoc_url
+      properties:
+        name:
+          type: string
+          description: API name
+        version:
+          type: string
+          description: API version
+        description:
+          type: string
+          description: Brief API description
+        docs_url:
+          type: string
+          description: URL to Swagger UI documentation
+        redoc_url:
+          type: string
+          description: URL to ReDoc documentation
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - version
+        - services
+      properties:
+        status:
+          type: string
+          description: Service health status (healthy, degraded, unhealthy)
+        version:
+          type: string
+          description: API version
+        services:
+          type: object
+          additionalProperties:
+            type: string
+          description: Status of dependent services
+
+    UploadResponse:
+      type: object
+      required:
+        - batch_id
+        - pdf_count
+        - status
+      properties:
+        batch_id:
+          type: string
+          description: Unique identifier for the batch of uploaded PDFs
+        pdf_count:
+          type: integer
+          description: Number of PDFs successfully uploaded in this batch
+        status:
+          type: string
+          description: Current processing status (queued, processing, completed, failed)
+        page_range:
+          $ref: '#/components/schemas/PageRange'
+        rejected_files:
+          type: array
+          items:
+            $ref: '#/components/schemas/RejectedFile'
+          description: List of PDFs that were rejected
+        warning:
+          type: string
+          description: Warning message if some PDFs were rejected
+
+    UploadErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message describing the failure reason
+        rejected_files:
+          type: array
+          items:
+            $ref: '#/components/schemas/RejectedFile'
+          description: Details of rejected files (when all files are rejected)
+
+    ErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Error description
+
+    DocumentProcessingStatus:
+      type: object
+      required:
+        - stage
+        - progress
+        - pdfs
+        - stats
+      properties:
+        stage:
+          type: string
+          description: Current processing stage
+        progress:
+          type: number
+          description: Progress percentage (0-100)
+        pdfs:
+          type: object
+          additionalProperties: true
+          description: Per-PDF processing status
+        stats:
+          type: object
+          additionalProperties: true
+          description: Processing statistics
+        error:
+          type: string
+          description: Error message if failed
+
+    SummarizationStatus:
+      type: object
+      required:
+        - stage
+        - progress
+        - summaries
+      properties:
+        stage:
+          type: string
+          description: Current summarization stage
+        progress:
+          type: number
+          description: Progress percentage (0-100)
+        summaries:
+          type: object
+          additionalProperties: true
+          description: Per-summary status
+        error:
+          type: string
+          description: Error message if failed
+
+    JobStatusResponse:
+      type: object
+      required:
+        - batch_id
+        - status
+      properties:
+        batch_id:
+          type: string
+          description: Batch identifier
+        status:
+          type: string
+          description: Overall job status
+        created_at:
+          type: string
+          description: Job creation timestamp (ISO 8601)
+        updated_at:
+          type: string
+          description: Last update timestamp (ISO 8601)
+        document_processing:
+          $ref: '#/components/schemas/DocumentProcessingStatus'
+        summarization:
+          $ref: '#/components/schemas/SummarizationStatus'
+
+    PDFListResponse:
+      type: object
+      required:
+        - batch_id
+        - pdf_names
+        - count
+      properties:
+        batch_id:
+          type: string
+          description: Batch identifier
+        pdf_names:
+          type: array
+          items:
+            type: string
+          description: List of PDF filenames in the batch
+        count:
+          type: integer
+          description: Total number of PDFs
+
+    SummaryResponse:
+      type: object
+      required:
+        - batch_id
+        - pdf_name
+        - summary_type
+        - summary
+        - method
+        - chunk_count
+        - cached
+      properties:
+        batch_id:
+          type: string
+          description: Batch identifier
+        pdf_name:
+          type: string
+          description: Name of the summarized PDF
+        summary_type:
+          type: string
+          description: Type of summary generated
+        summary:
+          type: string
+          description: The generated summary text
+        method:
+          type: string
+          description: Summarization method used (direct, hierarchical, multi_pdf_combine)
+        chunk_count:
+          type: integer
+          description: Number of chunks processed
+        cached:
+          type: boolean
+          description: Whether the summary was retrieved from cache
+        word_count:
+          type: integer
+          description: Word count of the summary
+
+    BatchSummaryResponse:
+      type: object
+      required:
+        - batch_id
+        - summary_type
+        - total_pdfs
+        - summaries
+      properties:
+        batch_id:
+          type: string
+          description: Batch identifier
+        summary_type:
+          type: string
+          description: Type of summary generated
+        total_pdfs:
+          type: integer
+          description: Number of PDFs summarized
+        summaries:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SummaryResponse'
+          description: Individual PDF summaries keyed by filename
+
+    RefinementRequest:
+      type: object
+      required:
+        - batch_id
+        - pdf_name
+        - user_feedback
+      properties:
+        batch_id:
+          type: string
+          description: Batch identifier containing the PDF
+        pdf_name:
+          type: string
+          description: Name of the PDF whose summary should be refined
+        summary_type:
+          $ref: '#/components/schemas/SummaryType'
+        user_feedback:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Instructions for how to refine the summary
+        original_summary:
+          type: string
+          description: The original summary text to refine (retrieved from cache if not provided)
+        user_id:
+          type: string
+          description: Optional user identifier for audit logging
+
+    ContextualRefinementRequest:
+      allOf:
+        - $ref: '#/components/schemas/RefinementRequest'
+        - type: object
+          properties:
+            top_k:
+              type: integer
+              minimum: 1
+              maximum: 50
+              default: 10
+              description: Number of relevant source chunks to retrieve via vector search
+
+    RefinedSummaryResponse:
+      type: object
+      required:
+        - batch_id
+        - pdf_name
+        - refined_summary
+        - refinement_type
+      properties:
+        batch_id:
+          type: string
+          description: Batch identifier
+        pdf_name:
+          type: string
+          description: Name of the PDF
+        refined_summary:
+          type: string
+          description: The refined summary text
+        refinement_type:
+          type: string
+          description: Type of refinement applied (simple, contextual)
+        user_id:
+          type: string
+          description: User identifier if provided
+
+    ContextualRefinedSummaryResponse:
+      allOf:
+        - $ref: '#/components/schemas/RefinedSummaryResponse'
+        - type: object
+          required:
+            - chunks_used
+            - chunks_detail
+          properties:
+            chunks_used:
+              type: integer
+              description: Number of source chunks used for context
+            chunks_detail:
+              type: array
+              items:
+                type: object
+                properties:
+                  page:
+                    type: integer
+                    description: Page number
+                  type:
+                    type: string
+                    description: Content type (text, table, image)
+                  relevance:
+                    type: number
+                    description: Relevance score (0-1)
+                  preview:
+                    type: string
+                    description: Preview of chunk content
+              description: Details of chunks used for context
+
+    SummaryWithRequestResponse:
+      type: object
+      required:
+        - request_id
+        - batch_id
+        - pdf_name
+        - summary_type
+        - summary
+        - method
+        - total_chunks
+        - total_pages
+        - cached
+      properties:
+        request_id:
+          type: string
+          description: Unique request identifier for refinement/regeneration
+        batch_id:
+          type: string
+          description: Batch identifier
+        pdf_name:
+          type: string
+          description: PDF filename
+        summary_type:
+          type: string
+          description: Type of summary generated
+        summary:
+          type: string
+          description: Generated summary text
+        method:
+          type: string
+          description: Generation method used
+        total_chunks:
+          type: integer
+          description: Number of chunks processed
+        total_pages:
+          type: integer
+          description: Number of pages in document
+        cached:
+          type: boolean
+          description: Whether summary was from cache
+
+    RefineByRequestRequest:
+      type: object
+      required:
+        - request_id
+        - user_feedback
+      properties:
+        request_id:
+          type: string
+          description: Previous request ID to refine
+        user_feedback:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Feedback/instructions for refinement
+
+    RegenerateByRequestRequest:
+      type: object
+      required:
+        - request_id
+        - user_feedback
+      properties:
+        request_id:
+          type: string
+          description: Previous request ID to regenerate from
+        user_feedback:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Guidance for regeneration - what to focus on or change
+        top_k:
+          type: integer
+          minimum: 5
+          maximum: 100
+          default: 20
+          description: Number of chunks to prioritize based on feedback relevance
+
+    RefineByRequestResponse:
+      type: object
+      required:
+        - request_id
+        - parent_request_id
+        - batch_id
+        - pdf_name
+        - summary_type
+        - original_summary
+        - refined_summary
+        - user_feedback
+        - method
+      properties:
+        request_id:
+          type: string
+          description: New request ID for this refined summary
+        parent_request_id:
+          type: string
+          description: Previous request ID that was refined
+        batch_id:
+          type: string
+          description: Batch identifier
+        pdf_name:
+          type: string
+          description: PDF filename
+        summary_type:
+          type: string
+          description: Summary type
+        original_summary:
+          type: string
+          description: Original summary before refinement
+        refined_summary:
+          type: string
+          description: Refined summary text
+        user_feedback:
+          type: string
+          description: User feedback used
+        method:
+          type: string
+          description: Method used (refine)
+
+    RegenerateByRequestResponse:
+      type: object
+      required:
+        - request_id
+        - parent_request_id
+        - batch_id
+        - pdf_name
+        - summary_type
+        - previous_summary
+        - regenerated_summary
+        - user_feedback
+        - method
+        - chunks_used
+        - relevant_chunks
+      properties:
+        request_id:
+          type: string
+          description: New request ID for regenerated summary
+        parent_request_id:
+          type: string
+          description: Previous request ID
+        batch_id:
+          type: string
+          description: Batch identifier
+        pdf_name:
+          type: string
+          description: PDF filename
+        summary_type:
+          type: string
+          description: Summary type
+        previous_summary:
+          type: string
+          description: Previous summary for reference
+        regenerated_summary:
+          type: string
+          description: Newly regenerated summary
+        user_feedback:
+          type: string
+          description: User guidance used
+        method:
+          type: string
+          description: Method used (regenerate)
+        chunks_used:
+          type: integer
+          description: Total chunks from document
+        relevant_chunks:
+          type: integer
+          description: Chunks prioritized based on feedback
+
+    RequestDetailsResponse:
+      type: object
+      required:
+        - request_id
+        - batch_id
+        - pdf_name
+        - summary_type
+        - summary
+        - method
+        - created_at
+        - chunks_used
+        - total_chunks
+        - total_pages
+      properties:
+        request_id:
+          type: string
+          description: Request identifier
+        batch_id:
+          type: string
+          description: Batch identifier
+        pdf_name:
+          type: string
+          description: PDF filename
+        summary_type:
+          type: string
+          description: Summary type
+        summary:
+          type: string
+          description: Full summary text
+        method:
+          type: string
+          description: Generation method
+        user_feedback:
+          type: string
+          description: User feedback if any
+        parent_request_id:
+          type: string
+          description: Parent request if refined/regenerated
+        created_at:
+          type: string
+          description: Creation timestamp (ISO 8601)
+        chunks_used:
+          type: integer
+          description: Chunks used in generation
+        total_chunks:
+          type: integer
+          description: Total chunks available
+        total_pages:
+          type: integer
+          description: Total pages in document
+
+    RequestHistoryItem:
+      type: object
+      required:
+        - request_id
+        - batch_id
+        - pdf_name
+        - summary_type
+        - method
+        - created_at
+        - summary_preview
+      properties:
+        request_id:
+          type: string
+          description: Request identifier
+        batch_id:
+          type: string
+          description: Batch identifier
+        pdf_name:
+          type: string
+          description: PDF filename
+        summary_type:
+          type: string
+          description: Summary type
+        method:
+          type: string
+          description: Generation method
+        created_at:
+          type: string
+          description: Creation timestamp
+        parent_request_id:
+          type: string
+          description: Parent request ID if refined/regenerated
+        user_feedback:
+          type: string
+          description: User feedback if any
+        summary_preview:
+          type: string
+          description: Truncated preview of summary
+
+    WebSocketStatsResponse:
+      type: object
+      required:
+        - pdf_connections
+        - summary_connections
+        - total_connections
+        - batches_with_connections
+      properties:
+        pdf_connections:
+          type: integer
+          description: Active PDF update connections
+        summary_connections:
+          type: integer
+          description: Active summary update connections
+        total_connections:
+          type: integer
+          description: Total active WebSocket connections
+        batches_with_connections:
+          type: array
+          items:
+            type: string
+          description: Batch IDs with active connections

@@ -188,9 +188,15 @@ class WebSocketManager:
 
     def get_connection_stats(self) -> dict:
         """Get current connection statistics."""
+        pdf_conns = sum(len(c) for c in self._pdf_connections.values())
+        summary_conns = sum(len(c) for c in self._summary_connections.values())
+
+        # Get all batch IDs with active connections
+        all_batches = set(self._pdf_connections.keys()) | set(self._summary_connections.keys())
+
         return {
-            "pdf_batches": len(self._pdf_connections),
-            "pdf_total_connections": sum(len(c) for c in self._pdf_connections.values()),
-            "summary_batches": len(self._summary_connections),
-            "summary_total_connections": sum(len(c) for c in self._summary_connections.values())
+            "pdf_connections": pdf_conns,
+            "summary_connections": summary_conns,
+            "total_connections": pdf_conns + summary_conns,
+            "batches_with_connections": list(all_batches)
         }

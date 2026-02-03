@@ -55,6 +55,7 @@ Currently, no authentication is required. All endpoints are publicly accessible.
 ## Rate Limits
 
 - Maximum 5 PDFs per upload batch
+- Maximum 50 pages per PDF (configurable)
 - 30-minute timeout per processing job
 - 24-hour data retention (configurable)
 """
@@ -102,12 +103,26 @@ class PageRange(BaseModel):
         }
 
 
+class RejectedFile(BaseModel):
+    """Information about a rejected PDF file."""
+    filename: str = Field(..., description="Name of the rejected file")
+    pages: Optional[int] = Field(None, description="Number of pages in the file (if readable)")
+    reason: str = Field(..., description="Reason for rejection")
+
+    class Config:
+        json_schema_extra = {
+            "example": {"filename": "large_report.pdf", "pages": 75, "reason": "Exceeds maximum of 50 pages"}
+        }
+
+
 class UploadResponse(BaseModel):
     """Response returned after successful PDF upload."""
     batch_id: str = Field(..., description="Unique identifier for the batch of uploaded PDFs")
-    pdf_count: int = Field(..., description="Number of PDFs uploaded in this batch")
+    pdf_count: int = Field(..., description="Number of PDFs successfully uploaded in this batch")
     status: str = Field(..., description="Current processing status (queued, processing, completed, failed)")
     page_range: Optional[PageRange] = Field(None, description="Page range filter if specified")
+    rejected_files: Optional[List[RejectedFile]] = Field(None, description="List of PDFs that were rejected")
+    warning: Optional[str] = Field(None, description="Warning message if some PDFs were rejected")
 
     class Config:
         json_schema_extra = {
@@ -115,7 +130,11 @@ class UploadResponse(BaseModel):
                 "batch_id": "550e8400-e29b-41d4-a716-446655440000",
                 "pdf_count": 2,
                 "status": "queued",
-                "page_range": {"start": 1, "end": 50}
+                "page_range": {"start": 1, "end": 50},
+                "rejected_files": [
+                    {"filename": "large_report.pdf", "pages": 75, "reason": "Exceeds maximum of 50 pages"}
+                ],
+                "warning": "1 PDF(s) were rejected and not processed"
             }
         }
 
@@ -130,10 +149,29 @@ class UploadErrorResponse(BaseModel):
         }
 
 
+class StageInfo(BaseModel):
+    """Status information for a single processing stage."""
+    status: str = Field(..., description="Stage status: pending, in_progress, completed, failed, skipped")
+    started_at: Optional[str] = Field(None, description="When the stage started")
+    completed_at: Optional[str] = Field(None, description="When the stage completed")
+    details: Optional[str] = Field(None, description="Additional details or error message")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "status": "completed",
+                "started_at": "2024-01-15 10:30:00",
+                "completed_at": "2024-01-15 10:31:00",
+                "details": None
+            }
+        }
+
+
 class DocumentProcessingStatus(BaseModel):
     """Status details for document processing module."""
     stage: str = Field(..., description="Current processing stage")
     progress: float = Field(..., description="Progress percentage (0-100)")
+    stages: Dict[str, StageInfo] = Field(..., description="Status of each processing stage")
     pdfs: Dict[str, Any] = Field(..., description="Per-PDF processing status")
     stats: Dict[str, Any] = Field(..., description="Processing statistics")
     error: Optional[str] = Field(None, description="Error message if failed")
@@ -143,6 +181,13 @@ class DocumentProcessingStatus(BaseModel):
             "example": {
                 "stage": "embedding",
                 "progress": 75.0,
+                "stages": {
+                    "queued": {"status": "completed", "started_at": "2024-01-15 10:30:00", "completed_at": "2024-01-15 10:30:00", "details": None},
+                    "extraction": {"status": "completed", "started_at": "2024-01-15 10:30:01", "completed_at": "2024-01-15 10:31:00", "details": None},
+                    "chunking": {"status": "completed", "started_at": "2024-01-15 10:31:00", "completed_at": "2024-01-15 10:31:30", "details": None},
+                    "embedding": {"status": "in_progress", "started_at": "2024-01-15 10:31:30", "completed_at": None, "details": None},
+                    "indexing": {"status": "pending", "started_at": None, "completed_at": None, "details": None}
+                },
                 "pdfs": {
                     "report.pdf": {"status": "completed", "pages": 25, "chunks": 48}
                 },
@@ -161,6 +206,7 @@ class SummarizationStatus(BaseModel):
     """Status details for summarization module."""
     stage: str = Field(..., description="Current summarization stage")
     progress: float = Field(..., description="Progress percentage (0-100)")
+    stages: Dict[str, StageInfo] = Field(..., description="Status of each summarization stage")
     summaries: Dict[str, Any] = Field(..., description="Per-summary status")
     error: Optional[str] = Field(None, description="Error message if failed")
 
@@ -169,6 +215,12 @@ class SummarizationStatus(BaseModel):
             "example": {
                 "stage": "batch_summarizing",
                 "progress": 50.0,
+                "stages": {
+                    "pending": {"status": "completed", "started_at": None, "completed_at": None, "details": None},
+                    "fetching_chunks": {"status": "completed", "started_at": "2024-01-15 10:32:00", "completed_at": "2024-01-15 10:32:05", "details": None},
+                    "batch_summarizing": {"status": "in_progress", "started_at": "2024-01-15 10:32:05", "completed_at": None, "details": "Processing batch 2/5"},
+                    "combining": {"status": "pending", "started_at": None, "completed_at": None, "details": None}
+                },
                 "summaries": {
                     "report.pdf:brief": {"status": "completed", "cached": True}
                 },
@@ -313,20 +365,52 @@ class ContextualRefinedSummaryResponse(RefinedSummaryResponse):
         }
 
 
+class BatchJobStatus(BaseModel):
+    """Full job status for a batch (same format as /job-status API)."""
+    batch_id: str = Field(..., description="Batch identifier")
+    status: str = Field(..., description="Overall batch status")
+    created_at: Optional[str] = Field(None, description="Job creation timestamp")
+    updated_at: Optional[str] = Field(None, description="Last update timestamp")
+    document_processing: Optional[DocumentProcessingStatus] = Field(None, description="Document processing module status")
+    summarization: Optional[SummarizationStatus] = Field(None, description="Summarization module status")
+
+
 class WebSocketStatsResponse(BaseModel):
-    """WebSocket connection statistics."""
+    """WebSocket connection statistics with full job status for all batches."""
     pdf_connections: int = Field(..., description="Active PDF update connections")
     summary_connections: int = Field(..., description="Active summary update connections")
     total_connections: int = Field(..., description="Total active WebSocket connections")
-    batches_with_connections: List[str] = Field(..., description="Batch IDs with active connections")
+    batches_with_connections: List[str] = Field(..., description="Batch IDs with active WebSocket connections")
+    all_batches: List[BatchJobStatus] = Field(default=[], description="Full job status for all batches in Redis (same format as /job-status API)")
 
     class Config:
         json_schema_extra = {
             "example": {
-                "pdf_connections": 5,
-                "summary_connections": 3,
-                "total_connections": 8,
-                "batches_with_connections": ["batch-1", "batch-2"]
+                "pdf_connections": 2,
+                "summary_connections": 1,
+                "total_connections": 3,
+                "batches_with_connections": ["batch-1"],
+                "all_batches": [
+                    {
+                        "batch_id": "550e8400-e29b-41d4-a716-446655440000",
+                        "status": "processing",
+                        "created_at": "2024-01-15 10:30:00",
+                        "updated_at": "2024-01-15 10:35:00",
+                        "document_processing": {
+                            "stage": "embedding",
+                            "progress": 75.0,
+                            "stages": {},
+                            "pdfs": {},
+                            "stats": {}
+                        },
+                        "summarization": {
+                            "stage": "pending",
+                            "progress": 0.0,
+                            "stages": {},
+                            "summaries": {}
+                        }
+                    }
+                ]
             }
         }
 
@@ -506,7 +590,7 @@ def health_check():
 
 
 # ---- config ----
-from doc_analysis.config import MAX_PDFS_PER_BATCH, EMBEDDING_DIM, BATCH_TTL_SECONDS
+from doc_analysis.config import MAX_PDFS_PER_BATCH, MAX_PAGES_PER_PDF, EMBEDDING_DIM, BATCH_TTL_SECONDS
 
 # ---- job store ----
 from doc_analysis.jobs.job_store import (
@@ -560,8 +644,15 @@ Upload one or more PDF documents for extraction, chunking, embedding, and indexi
 ## Limits
 
 - Maximum **5 PDFs** per batch
+- Maximum **50 pages** per PDF (configurable)
 - Processing timeout: **30 minutes**
 - Data retention: **24 hours** (configurable)
+
+## Page Validation
+
+Each uploaded PDF is validated for page count. PDFs exceeding the maximum page limit
+will be **rejected** and not processed. The response will include details about rejected
+files in the `rejected_files` field.
 
 ## Page Range Filtering
 
@@ -594,23 +685,27 @@ def upload_pdfs(
     Returns a batch_id that can be used to track processing status
     and retrieve results.
     """
+    import fitz  # PyMuPDF
+    import os
+
     logger.info(f"Received upload request with {len(files)} file(s)")
 
     if len(files) > MAX_PDFS_PER_BATCH:
         logger.warning(f"Upload rejected: {len(files)} files exceeds limit of {MAX_PDFS_PER_BATCH}")
-        return {
-            "error": f"Maximum {MAX_PDFS_PER_BATCH} PDFs allowed per batch"
-        }
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Maximum {MAX_PDFS_PER_BATCH} PDFs allowed per batch"
+        )
 
     batch_id = str(uuid.uuid4())
     logger.info(f"Created batch_id: {batch_id}")
     if start_page or end_page:
         logger.info(f"Page range: {start_page} to {end_page}")
 
-    # create job entry
-    create_job(batch_id, [f.filename for f in files])
-
+    # Save files temporarily and validate page counts
     paths = []
+    valid_files = []
+    rejected_files = []
 
     for idx, file in enumerate(files):
         pdf_id = f"pdf_{idx + 1}"
@@ -619,12 +714,56 @@ def upload_pdfs(
         with open(path, "wb") as f:
             shutil.copyfileobj(file.file, f)
 
-        paths.append(path)
-        logger.debug(f"Saved {file.filename} to {path}")
+        # Validate page count
+        try:
+            pdf_doc = fitz.open(path)
+            page_count = len(pdf_doc)
+            pdf_doc.close()
+
+            if page_count > MAX_PAGES_PER_PDF:
+                logger.warning(f"PDF '{file.filename}' rejected: {page_count} pages exceeds limit of {MAX_PAGES_PER_PDF}")
+                rejected_files.append({
+                    "filename": file.filename,
+                    "pages": page_count,
+                    "reason": f"Exceeds maximum of {MAX_PAGES_PER_PDF} pages"
+                })
+                # Clean up the rejected file
+                os.remove(path)
+                continue
+
+            paths.append(path)
+            valid_files.append(file)
+            logger.debug(f"Saved {file.filename} ({page_count} pages) to {path}")
+
+        except Exception as e:
+            logger.error(f"Failed to read PDF '{file.filename}': {str(e)}")
+            rejected_files.append({
+                "filename": file.filename,
+                "pages": None,
+                "reason": f"Failed to read PDF: {str(e)}"
+            })
+            # Clean up the invalid file
+            if os.path.exists(path):
+                os.remove(path)
+            continue
+
+    # If all files were rejected, return error
+    if not valid_files:
+        error_msg = f"All {len(files)} PDF(s) were rejected"
+        if rejected_files:
+            error_msg += ": " + "; ".join([f"{r['filename']} ({r['reason']})" for r in rejected_files])
+        logger.warning(error_msg)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": error_msg, "rejected_files": rejected_files}
+        )
+
+    # Create job entry only for valid files
+    create_job(batch_id, [f.filename for f in valid_files])
 
     enqueue_pdf_ingestion(
         batch_id=batch_id,
-        filenames=[f.filename for f in files],
+        filenames=[f.filename for f in valid_files],
         paths=paths,
         embedding_dim=EMBEDDING_DIM,
         ttl_seconds=BATCH_TTL_SECONDS,
@@ -632,14 +771,21 @@ def upload_pdfs(
         end_page=end_page
     )
 
-    logger.info(f"Batch {batch_id} queued for processing with {len(files)} PDFs")
+    logger.info(f"Batch {batch_id} queued for processing with {len(valid_files)} PDFs")
 
-    return {
+    response = {
         "batch_id": batch_id,
-        "pdf_count": len(files),
+        "pdf_count": len(valid_files),
         "status": "queued",
         "page_range": {"start": start_page, "end": end_page} if start_page or end_page else None
     }
+
+    # Include rejected files info if any
+    if rejected_files:
+        response["rejected_files"] = rejected_files
+        response["warning"] = f"{len(rejected_files)} PDF(s) were rejected and not processed"
+
+    return response
 
 @app.get(
     "/job-status/{batch_id}",
@@ -705,7 +851,45 @@ def job_status(
     """
     logger.debug(f"Job status request for batch_id: {batch_id}, module: {module}")
 
-    job = get_job(batch_id)
+    try:
+        job = get_job(batch_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {batch_id}")
+    except Exception as e:
+        logger.error(f"Error getting job status: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Transform job data to match response model structure
+    def transform_stages(stages_dict):
+        """Transform stages dict to include status, timestamps, and error details."""
+        transformed = {}
+        for stage_name, stage_data in stages_dict.items():
+            transformed[stage_name] = {
+                "status": stage_data.get("status", "pending"),
+                "started_at": stage_data.get("started_at"),
+                "completed_at": stage_data.get("completed_at"),
+                "details": stage_data.get("details")  # Contains error message if failed
+            }
+        return transformed
+
+    def transform_doc_processing(dp):
+        return {
+            "stage": dp.get("current_stage", dp.get("status", "unknown")),
+            "progress": dp.get("progress", 0),
+            "stages": transform_stages(dp.get("stages", {})),
+            "pdfs": dp.get("pdfs", {}),
+            "stats": dp.get("stats", {}),
+            "error": dp.get("error")
+        }
+
+    def transform_summarization(sm):
+        return {
+            "stage": sm.get("current_stage", sm.get("status", "unknown")),
+            "progress": sm.get("progress", 0),
+            "stages": transform_stages(sm.get("stages", {})),
+            "summaries": sm.get("summaries", {}),
+            "error": sm.get("error")
+        }
 
     if module == "document_processing":
         return {
@@ -713,7 +897,7 @@ def job_status(
             "status": job["status"],
             "created_at": job.get("created_at"),
             "updated_at": job.get("updated_at"),
-            "document_processing": job["document_processing"]
+            "document_processing": transform_doc_processing(job["document_processing"])
         }
     elif module == "summarization":
         return {
@@ -721,11 +905,18 @@ def job_status(
             "status": job["status"],
             "created_at": job.get("created_at"),
             "updated_at": job.get("updated_at"),
-            "summarization": job["summarization"]
+            "summarization": transform_summarization(job["summarization"])
         }
     else:
         # Return complete job status
-        return job
+        return {
+            "batch_id": job["batch_id"],
+            "status": job["status"],
+            "created_at": job.get("created_at"),
+            "updated_at": job.get("updated_at"),
+            "document_processing": transform_doc_processing(job["document_processing"]),
+            "summarization": transform_summarization(job["summarization"])
+        }
 
 @app.websocket("/ws/job-status/{batch_id}")
 async def job_status_ws(websocket: WebSocket, batch_id: str):
@@ -870,23 +1061,150 @@ async def summary_status_ws(websocket: WebSocket, batch_id: str):
     "/ws/stats",
     response_model=WebSocketStatsResponse,
     tags=["System"],
-    summary="Get WebSocket connection statistics",
+    summary="Get WebSocket stats and all batch job statuses",
     description="""
-Retrieve statistics about active WebSocket connections.
+Retrieve WebSocket connection statistics and **full job status for ALL batches** in Redis.
 
-Useful for monitoring and debugging real-time update connections.
+This endpoint combines connection stats with complete job information, making it ideal for
+building live monitoring dashboards that show processing stages for all batches.
 
 ## Response Fields
 
 - **pdf_connections**: Number of clients listening for PDF processing updates
 - **summary_connections**: Number of clients listening for summarization updates
 - **total_connections**: Combined total of all active connections
-- **batches_with_connections**: List of batch IDs that have active listeners
+- **batches_with_connections**: List of batch IDs that have active WebSocket listeners
+- **all_batches**: Full job status for ALL batches in Redis (same format as `/job-status/{batch_id}`)
+
+## all_batches Format
+
+Each batch in `all_batches` includes the complete job status structure:
+
+```json
+{
+    "batch_id": "...",
+    "status": "processing",
+    "created_at": "2024-01-15 10:30:00",
+    "updated_at": "2024-01-15 10:35:00",
+    "document_processing": {
+        "stage": "embedding",
+        "progress": 75.0,
+        "stages": {
+            "queued": {"status": "completed", "started_at": "...", "completed_at": "...", "details": null},
+            "extraction": {"status": "completed", ...},
+            "embedding": {"status": "in_progress", ...}
+        },
+        "pdfs": {...},
+        "stats": {...}
+    },
+    "summarization": {
+        "stage": "pending",
+        "progress": 0.0,
+        "stages": {...},
+        "summaries": {}
+    }
+}
+```
+
+## Use Cases
+
+- **Live dashboards**: Poll this endpoint to show real-time status of all batches
+- **Monitoring**: Track processing progress across all active jobs
+- **Debugging**: View detailed stage information for troubleshooting
+- **Single batch**: Use `batch_id` parameter to get status for a specific batch only
 """,
 )
-def get_websocket_stats():
-    """Get WebSocket connection statistics for monitoring."""
-    return ws_manager.get_connection_stats()
+def get_websocket_stats(
+    batch_id: Optional[str] = Query(
+        None,
+        description="Filter by specific batch ID. If provided, only returns status for this batch.",
+        examples=["550e8400-e29b-41d4-a716-446655440000"]
+    )
+):
+    """Get WebSocket connection statistics with full job status for all batches."""
+    import redis
+    from doc_analysis.jobs.job_store import get_job
+
+    stats = ws_manager.get_connection_stats()
+
+    # Transform functions (same as in /job-status endpoint)
+    def transform_stages(stages_dict):
+        transformed = {}
+        for stage_name, stage_data in stages_dict.items():
+            transformed[stage_name] = {
+                "status": stage_data.get("status", "pending"),
+                "started_at": stage_data.get("started_at"),
+                "completed_at": stage_data.get("completed_at"),
+                "details": stage_data.get("details")
+            }
+        return transformed
+
+    def transform_doc_processing(dp):
+        return {
+            "stage": dp.get("current_stage", dp.get("status", "unknown")),
+            "progress": dp.get("progress", 0),
+            "stages": transform_stages(dp.get("stages", {})),
+            "pdfs": dp.get("pdfs", {}),
+            "stats": dp.get("stats", {}),
+            "error": dp.get("error")
+        }
+
+    def transform_summarization(sm):
+        return {
+            "stage": sm.get("current_stage", sm.get("status", "unknown")),
+            "progress": sm.get("progress", 0),
+            "stages": transform_stages(sm.get("stages", {})),
+            "summaries": sm.get("summaries", {}),
+            "error": sm.get("error")
+        }
+
+    # Fetch batches from Redis
+    all_batches = []
+    try:
+        r = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+        if batch_id:
+            # Fetch only the specific batch
+            try:
+                job = get_job(batch_id)
+                if job:
+                    all_batches.append({
+                        "batch_id": batch_id,
+                        "status": job.get("status", "unknown"),
+                        "created_at": job.get("created_at"),
+                        "updated_at": job.get("updated_at"),
+                        "document_processing": transform_doc_processing(job.get("document_processing", {})),
+                        "summarization": transform_summarization(job.get("summarization", {}))
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to get job info for batch {batch_id}: {e}")
+        else:
+            # Fetch all batches
+            job_keys = r.keys("job:*")
+
+            for key in job_keys:
+                key_batch_id = key.replace("job:", "")
+                try:
+                    job = get_job(key_batch_id)
+                    all_batches.append({
+                        "batch_id": key_batch_id,
+                        "status": job.get("status", "unknown"),
+                        "created_at": job.get("created_at"),
+                        "updated_at": job.get("updated_at"),
+                        "document_processing": transform_doc_processing(job.get("document_processing", {})),
+                        "summarization": transform_summarization(job.get("summarization", {}))
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to get job info for batch {key_batch_id}: {e}")
+
+            # Sort by updated_at (most recent first)
+            all_batches.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
+
+    except Exception as e:
+        logger.error(f"Failed to fetch batches from Redis: {e}")
+
+    stats["all_batches"] = all_batches
+    return stats
 
 
 # ---- Summary APIs ----

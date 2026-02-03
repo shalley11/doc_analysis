@@ -4,11 +4,13 @@ E5_MAX_WORDS = 500
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 VISION_MODEL_POC = "gemma3:4b"
+
 VISION_MODEL_PROD = "gemma3-12b"
 
 MIN_TEXT_CHARS = 300
 
 MAX_PDFS_PER_BATCH = 5
+MAX_PAGES_PER_PDF = 50  # Maximum pages allowed per PDF
 BATCH_TTL_SECONDS = 24 * 3600  # 1 day
 EMBEDDING_DIM = 1024  # E5-large
 
