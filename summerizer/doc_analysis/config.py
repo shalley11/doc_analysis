@@ -1,5 +1,23 @@
+import os
 from dataclasses import dataclass
 
+# =========================
+# Redis Configuration
+# =========================
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+
+# =========================
+# Milvus Configuration
+# =========================
+MILVUS_HOST = os.getenv("MILVUS_HOST", "localhost")
+MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
+
+# =========================
+# E5 Embedding Model Configuration
+# =========================
+E5_MODEL_PATH = os.getenv("E5_MODEL_PATH", "/home/labuser/Documents/doc_analysis/models/e5-large-v2")
+E5_MODEL_NAME = "intfloat/e5-large-v2"  # HuggingFace fallback
 E5_MAX_WORDS = 500
 
 OLLAMA_URL = "http://localhost:11434/api/generate"

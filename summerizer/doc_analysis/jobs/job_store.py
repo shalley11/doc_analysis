@@ -10,8 +10,9 @@ import time
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from redis import Redis
+from doc_analysis.config import REDIS_HOST, REDIS_PORT
 
-redis = Redis(host="localhost", port=6379, decode_responses=True)
+redis = Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
 
 # ============================================================================

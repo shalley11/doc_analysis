@@ -3,6 +3,7 @@ import torch
 import numpy as np
 from transformers import AutoTokenizer, AutoModel
 from typing import List, Callable, Optional
+from doc_analysis.config import E5_MODEL_PATH, E5_MODEL_NAME
 
 
 # -------------------------------
@@ -12,7 +13,8 @@ CPU_CORES = os.cpu_count() or 4
 torch.set_num_threads(CPU_CORES)
 torch.set_num_interop_threads(1)
 
-_MODEL_NAME = "intfloat/e5-large-v2"
+# Local path for offline deployment (fallback to HuggingFace if not found)
+_MODEL_NAME = E5_MODEL_PATH if os.path.exists(E5_MODEL_PATH) else E5_MODEL_NAME
 
 _tokenizer = AutoTokenizer.from_pretrained(_MODEL_NAME)
 _model = AutoModel.from_pretrained(_MODEL_NAME)

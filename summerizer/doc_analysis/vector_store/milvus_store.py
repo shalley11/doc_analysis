@@ -3,12 +3,13 @@ Simple Milvus store for vector operations.
 """
 from typing import Optional, List
 from pymilvus import Collection, connections
+from doc_analysis.config import MILVUS_HOST, MILVUS_PORT
 
 
 def _ensure_connection():
     """Ensure Milvus connection exists."""
     if not connections.has_connection("default"):
-        connections.connect(alias="default", host="localhost", port="19530")
+        connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
 
 
 class MilvusStore:
