@@ -37,6 +37,9 @@ env/
 uploads/
 outputs/
 offline_models/
+testing_document/
+*.pdf
+chunking.json
 
 # Logs
 *.log
