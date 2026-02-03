@@ -1,0 +1,60 @@
+version: '3.8'
+
+# Airgapped deployment - connects to external Redis, Milvus, vLLM
+# Set environment variables before running:
+#   REDIS_HOST, MILVUS_HOST, VLLM_URL
+
+services:
+  # Document Analysis API
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: doc-analysis-api
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - MILVUS_HOST=${MILVUS_HOST:-milvus}
+      - MILVUS_PORT=${MILVUS_PORT:-19530}
+      - E5_MODEL_PATH=/app/models/e5-large-v2
+      - LLM_BACKEND=vllm
+      - VLLM_URL=${VLLM_URL:-http://vllm:8000}
+      - SUMMARY_MODEL=${SUMMARY_MODEL:-gemma-3-12b-it}
+    volumes:
+      - /tmp/doc_images:/tmp/doc_images
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # RQ Worker for background processing (GPU-enabled)
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: doc-analysis-worker
+    command: python -m doc_analysis.workers.rq_worker
+    environment:
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - MILVUS_HOST=${MILVUS_HOST:-milvus}
+      - MILVUS_PORT=${MILVUS_PORT:-19530}
+      - E5_MODEL_PATH=/app/models/e5-large-v2
+      - LLM_BACKEND=vllm
+      - VLLM_URL=${VLLM_URL:-http://vllm:8000}
+      - SUMMARY_MODEL=${SUMMARY_MODEL:-gemma-3-12b-it}
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - /tmp/doc_images:/tmp/doc_images
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
