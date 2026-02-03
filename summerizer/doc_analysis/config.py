@@ -50,7 +50,7 @@ VISION_BATCH_SIZE = 3        # Number of parallel vision requests
 VISION_TIMEOUT = 900         # 15 minutes timeout per image
 
 # Summarization settings
-SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gemma3:4b")  # Model for text summarization
+SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gemma-3-12b-it")  # Model for text summarization (vLLM)
 SUMMARY_TIMEOUT = 300  # 5 minutes timeout for summary generation
 
 # Hierarchical summarization settings

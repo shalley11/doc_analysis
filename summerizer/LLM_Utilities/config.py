@@ -6,15 +6,16 @@ LLM_BACKEND = os.getenv("LLM_BACKEND", "vllm")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 VLLM_URL = os.getenv("VLLM_URL", "http://localhost:8000")
 
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gemma3:4b")
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gemma-3-12b-it")  # vLLM model name
 
 # =========================
 # Model Context Lengths
 # =========================
 
 MODEL_CONTEXT_LENGTHS = {
-    "gemma3:4b": 8192,   # POC
-    "gemma3:12b": 8192,  # PROD
+    "gemma3:4b": 8192,        # Ollama POC
+    "gemma3:12b": 8192,       # Ollama PROD
+    "gemma-3-12b-it": 8192,   # vLLM airgapped
 }
 
 DEFAULT_CONTEXT_LENGTH = 8192  # Fallback for unknown models
