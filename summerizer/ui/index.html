@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Summarizer</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>PDF Summarizer</h1>
+            <p class="subtitle">Upload, Process, Analyze & Query your PDFs</p>
+        </header>
+
+        <!-- Tab Navigation -->
+        <nav class="tabs">
+            <button class="tab-btn active" data-tab="upload">Upload</button>
+            <button class="tab-btn" data-tab="status">Status</button>
+            <button class="tab-btn" data-tab="chunks">Chunks</button>
+            <button class="tab-btn" data-tab="qa">Q&A</button>
+        </nav>
+
+        <!-- Tab Content -->
+        <main class="tab-content">
+            <!-- Upload Tab -->
+            <section id="upload" class="tab-panel active">
+                <div class="upload-area" id="dropZone">
+                    <div class="upload-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                    </div>
+                    <p>Drag & drop PDF files here</p>
+                    <p class="upload-or">or</p>
+                    <label class="btn btn-primary">
+                        Browse Files
+                        <input type="file" id="fileInput" accept=".pdf" multiple hidden>
+                    </label>
+                </div>
+
+                <div id="selectedFiles" class="selected-files"></div>
+
+                <div class="upload-options">
+                    <h3>Processing Options</h3>
+                    <div class="option-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="useVision">
+                            <span>Enable Vision Processing</span>
+                            <small>Use AI to describe images and tables</small>
+                        </label>
+                    </div>
+                    <div class="option-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="useSemanticChunking">
+                            <span>Enable Semantic Chunking</span>
+                            <small>Use embeddings for better topic boundaries</small>
+                        </label>
+                    </div>
+                </div>
+
+                <button id="uploadBtn" class="btn btn-primary btn-large" disabled>
+                    Upload & Process
+                </button>
+            </section>
+
+            <!-- Status Tab -->
+            <section id="status" class="tab-panel">
+                <div id="noActiveJob" class="empty-state">
+                    <p>No active processing job</p>
+                    <small>Upload a PDF to start processing</small>
+                </div>
+
+                <div id="statusContent" class="status-content hidden">
+                    <div class="status-header">
+                        <div class="status-info">
+                            <h3 id="statusBatchId">Batch: --</h3>
+                            <span id="statusState" class="status-badge">--</span>
+                        </div>
+                        <div class="progress-container">
+                            <div class="progress-bar">
+                                <div id="progressFill" class="progress-fill" style="width: 0%"></div>
+                            </div>
+                            <span id="progressText">0%</span>
+                        </div>
+                    </div>
+
+                    <div class="status-message" id="statusMessage">
+                        Waiting for updates...
+                    </div>
+
+                    <!-- Stage Timeline -->
+                    <div class="timeline">
+                        <div class="timeline-item" data-stage="initializing">
+                            <div class="timeline-marker"></div>
+                            <div class="timeline-content">
+                                <h4>Initializing</h4>
+                                <p>Setting up processing environment</p>
+                            </div>
+                        </div>
+                        <div class="timeline-item" data-stage="extracting">
+                            <div class="timeline-marker"></div>
+                            <div class="timeline-content">
+                                <h4>Extracting</h4>
+                                <p>Extracting text, images, tables</p>
+                            </div>
+                        </div>
+                        <div class="timeline-item" data-stage="vision">
+                            <div class="timeline-marker"></div>
+                            <div class="timeline-content">
+                                <h4>Vision Processing</h4>
+                                <p>Analyzing images with AI</p>
+                            </div>
+                        </div>
+                        <div class="timeline-item" data-stage="chunking">
+                            <div class="timeline-marker"></div>
+                            <div class="timeline-content">
+                                <h4>Chunking</h4>
+                                <p>Creating text chunks</p>
+                            </div>
+                        </div>
+                        <div class="timeline-item" data-stage="embedding">
+                            <div class="timeline-marker"></div>
+                            <div class="timeline-content">
+                                <h4>Embedding</h4>
+                                <p>Generating vector embeddings</p>
+                            </div>
+                        </div>
+                        <div class="timeline-item" data-stage="indexing">
+                            <div class="timeline-marker"></div>
+                            <div class="timeline-content">
+                                <h4>Indexing</h4>
+                                <p>Storing in vector database</p>
+                            </div>
+                        </div>
+                        <div class="timeline-item" data-stage="completed">
+                            <div class="timeline-marker"></div>
+                            <div class="timeline-content">
+                                <h4>Completed</h4>
+                                <p>Ready for Q&A</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PDF Details -->
+                    <div id="pdfDetails" class="pdf-details"></div>
+                </div>
+            </section>
+
+            <!-- Chunks Tab -->
+            <section id="chunks" class="tab-panel">
+                <div id="noChunks" class="empty-state">
+                    <p>No chunks available</p>
+                    <small>Process a PDF to view chunks</small>
+                </div>
+
+                <div id="chunksContent" class="chunks-content hidden">
+                    <div class="chunks-header">
+                        <div class="chunks-stats">
+                            <span id="totalChunks">0 chunks</span>
+                            <span class="separator">|</span>
+                            <span id="chunkTypes">--</span>
+                        </div>
+                        <div class="chunks-filters">
+                            <select id="chunkTypeFilter">
+                                <option value="">All Types</option>
+                                <option value="text">Text</option>
+                                <option value="table">Table</option>
+                                <option value="image">Image</option>
+                            </select>
+                            <select id="chunkPdfFilter">
+                                <option value="">All PDFs</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div id="chunksList" class="chunks-list"></div>
+                </div>
+            </section>
+
+            <!-- Q&A Tab -->
+            <section id="qa" class="tab-panel">
+                <div id="noQA" class="empty-state">
+                    <p>Q&A not available</p>
+                    <small>Process a PDF first to ask questions</small>
+                </div>
+
+                <div id="qaContent" class="qa-content hidden">
+                    <div class="qa-input-area">
+                        <textarea id="questionInput" placeholder="Ask a question about your documents..." rows="3"></textarea>
+                        <div class="qa-options">
+                            <label>
+                                Top K:
+                                <input type="number" id="topK" value="5" min="1" max="20">
+                            </label>
+                            <label>
+                                Temperature:
+                                <input type="number" id="temperature" value="0.7" min="0" max="1" step="0.1">
+                            </label>
+                        </div>
+                        <button id="askBtn" class="btn btn-primary">
+                            Ask Question
+                        </button>
+                    </div>
+
+                    <div class="qa-actions">
+                        <div class="summary-options">
+                            <label>Scope:</label>
+                            <select id="summaryScope">
+                                <option value="all">All Documents (Combined)</option>
+                                <option value="document">Per Document</option>
+                                <option value="topic">By Topic/Section</option>
+                            </select>
+                        </div>
+                        <div class="summary-options">
+                            <label>Format:</label>
+                            <select id="summaryFormat">
+                                <option value="bullets">Bullet Points</option>
+                                <option value="brief">Brief</option>
+                                <option value="detailed">Detailed</option>
+                            </select>
+                        </div>
+                        <div class="summary-options" id="topicCountOption" style="display: none;">
+                            <label>Topics:</label>
+                            <input type="number" id="numTopics" value="5" min="2" max="10">
+                        </div>
+                        <button id="summarizeBtn" class="btn btn-secondary">
+                            Generate Summary
+                        </button>
+                    </div>
+
+                    <div id="qaResults" class="qa-results"></div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Batch ID Display -->
+        <footer id="batchInfo" class="batch-info hidden">
+            <span>Current Batch:</span>
+            <code id="currentBatchId">--</code>
+            <button id="copyBatchId" class="btn-icon" title="Copy Batch ID">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+            </button>
+        </footer>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay hidden">
+        <div class="spinner"></div>
+        <p id="loadingText">Processing...</p>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
