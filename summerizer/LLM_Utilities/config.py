@@ -1,8 +1,7 @@
 import os
 
-#LLM_BACKEND = os.getenv("LLM_BACKEND", "ollama")
-LLM_BACKEND="ollama"
-# ollama | vllm
+# LLM Backend: "vllm" (default for airgapped) or "ollama"
+LLM_BACKEND = os.getenv("LLM_BACKEND", "vllm")
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 VLLM_URL = os.getenv("VLLM_URL", "http://localhost:8000")
@@ -29,9 +28,9 @@ CONTEXT_REJECT_THRESHOLD = 100  # Reject requests exceeding this percentage
 # Redis Configuration
 # =========================
 
-REDIS_HOST = "localhost"
-REDIS_PORT = 6379
-REDIS_DB = 0
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_DB = int(os.getenv("REDIS_DB", 0))
 REFINEMENT_TTL = 7200  # 2 hours TTL for session expiry
 
 

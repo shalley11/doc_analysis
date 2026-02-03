@@ -20,7 +20,13 @@ E5_MODEL_PATH = os.getenv("E5_MODEL_PATH", "/home/labuser/Documents/doc_analysis
 E5_MODEL_NAME = "intfloat/e5-large-v2"  # HuggingFace fallback
 E5_MAX_WORDS = 500
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
+# =========================
+# LLM Backend Configuration
+# =========================
+LLM_BACKEND = os.getenv("LLM_BACKEND", "vllm")  # "vllm" (airgapped) or "ollama"
+VLLM_URL = os.getenv("VLLM_URL", "http://localhost:8000")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+
 VISION_MODEL_POC = "gemma3:4b"
 VISION_MODEL_PROD = "gemma3-12b"
 
@@ -44,7 +50,7 @@ VISION_BATCH_SIZE = 3        # Number of parallel vision requests
 VISION_TIMEOUT = 900         # 15 minutes timeout per image
 
 # Summarization settings
-SUMMARY_MODEL = "gemma3:4b"  # Model for text summarization
+SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gemma3:4b")  # Model for text summarization
 SUMMARY_TIMEOUT = 300  # 5 minutes timeout for summary generation
 
 # Hierarchical summarization settings
