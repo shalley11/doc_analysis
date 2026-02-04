@@ -3,12 +3,31 @@ Simple Milvus store for vector operations.
 """
 from typing import Optional, List
 from pymilvus import Collection, connections
+from doc_analysis import config
+
+
+def _get_milvus_connect_params():
+    """Build Milvus connection parameters with optional auth."""
+    params = {
+        "alias": "default",
+        "host": config.MILVUS_HOST,
+        "port": str(config.MILVUS_PORT),
+    }
+    # Token-based auth (Milvus Cloud or configured auth)
+    if config.MILVUS_TOKEN:
+        params["token"] = config.MILVUS_TOKEN
+    # User/password auth
+    elif config.MILVUS_USER and config.MILVUS_PASSWORD:
+        params["user"] = config.MILVUS_USER
+        params["password"] = config.MILVUS_PASSWORD
+    return params
 
 
 def _ensure_connection():
     """Ensure Milvus connection exists."""
     if not connections.has_connection("default"):
-        connections.connect(alias="default", host="localhost", port="19530")
+        params = _get_milvus_connect_params()
+        connections.connect(**params)
 
 
 class MilvusStore:

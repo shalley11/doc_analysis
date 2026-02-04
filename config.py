@@ -61,6 +61,9 @@ REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
 # Milvus settings
 MILVUS_HOST = os.environ.get("MILVUS_HOST", "localhost")
 MILVUS_PORT = int(os.environ.get("MILVUS_PORT", 19530))
+MILVUS_USER = os.environ.get("MILVUS_USER", "")  # Optional: username for auth
+MILVUS_PASSWORD = os.environ.get("MILVUS_PASSWORD", "")  # Optional: password for auth
+MILVUS_TOKEN = os.environ.get("MILVUS_TOKEN", "")  # Optional: token for cloud/auth
 
 # Model settings
 E5_MODEL_PATH = os.environ.get("E5_MODEL_PATH", "intfloat/e5-large-v2")

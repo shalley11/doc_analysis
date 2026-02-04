@@ -71,6 +71,11 @@ class EventSubscriber:
 
         while self._running:
             try:
+                # Only get messages if we have active subscriptions
+                if not self._callbacks:
+                    await asyncio.sleep(1)
+                    continue
+
                 message = await pubsub.get_message(
                     ignore_subscribe_messages=True,
                     timeout=1.0

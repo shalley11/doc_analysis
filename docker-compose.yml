@@ -11,16 +11,21 @@ services:
       dockerfile: Dockerfile
     container_name: doc-analysis-api
     network_mode: host
-    command: uvicorn doc_analysis.api:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn doc_analysis.api:app --host 0.0.0.0 --port ${API_PORT:-8000} --reload
     environment:
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - MILVUS_HOST=${MILVUS_HOST:-milvus}
       - MILVUS_PORT=${MILVUS_PORT:-19530}
-      - E5_MODEL_PATH=/app/models/e5-large-v2
-      - LLM_BACKEND=vllm
+      - MILVUS_USER=${MILVUS_USER:-}
+      - MILVUS_PASSWORD=${MILVUS_PASSWORD:-}
+      - MILVUS_TOKEN=${MILVUS_TOKEN:-}
+      - E5_MODEL_PATH=${E5_MODEL_PATH:-/app/models/e5-large-v2}
+      - LLM_BACKEND=${LLM_BACKEND:-vllm}
       - VLLM_URL=${VLLM_URL:-http://vllm:8000}
       - SUMMARY_MODEL=${SUMMARY_MODEL:-gemma-3-12b-it}
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
+      - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-1}
     volumes:
       - /tmp/doc_images:/tmp/doc_images
       # Mount source code for live editing
@@ -40,6 +45,7 @@ services:
       - ./vision:/app/doc_analysis/vision
       - ./workers:/app/doc_analysis/workers
       - ./models:/app/models
+      - ./static:/app/doc_analysis/static
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
@@ -59,11 +65,16 @@ services:
       - REDIS_PORT=${REDIS_PORT:-6379}
       - MILVUS_HOST=${MILVUS_HOST:-milvus}
       - MILVUS_PORT=${MILVUS_PORT:-19530}
-      - E5_MODEL_PATH=/app/models/e5-large-v2
-      - LLM_BACKEND=vllm
+      - MILVUS_USER=${MILVUS_USER:-}
+      - MILVUS_PASSWORD=${MILVUS_PASSWORD:-}
+      - MILVUS_TOKEN=${MILVUS_TOKEN:-}
+      - E5_MODEL_PATH=${E5_MODEL_PATH:-/app/models/e5-large-v2}
+      - LLM_BACKEND=${LLM_BACKEND:-vllm}
       - VLLM_URL=${VLLM_URL:-http://vllm:8000}
       - SUMMARY_MODEL=${SUMMARY_MODEL:-gemma-3-12b-it}
       - NVIDIA_VISIBLE_DEVICES=all
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
+      - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-1}
     volumes:
       - /tmp/doc_images:/tmp/doc_images
       # Mount source code for live editing

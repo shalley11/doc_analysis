@@ -6,6 +6,7 @@ from typing import Optional
 from pymilvus import connections, Collection, utility
 
 from doc_analysis.vector_store.milvus_schema import get_chunk_schema
+from doc_analysis.vector_store.milvus_store import _get_milvus_connect_params
 
 
 def create_temp_collection(
@@ -24,7 +25,9 @@ def create_temp_collection(
     Returns:
         Loaded Milvus Collection
     """
-    connections.connect(alias="default", host="localhost", port="19530")
+    if not connections.has_connection("default"):
+        params = _get_milvus_connect_params()
+        connections.connect(**params)
 
     # Drop existing collection if exists
     if utility.has_collection(collection_name):

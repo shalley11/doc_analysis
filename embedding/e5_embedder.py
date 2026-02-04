@@ -12,10 +12,11 @@ CPU_CORES = os.cpu_count() or 4
 torch.set_num_threads(CPU_CORES)
 torch.set_num_interop_threads(1)
 
-_MODEL_NAME = "intfloat/e5-large-v2"
+# Use local model path from env, fallback to HuggingFace name
+_MODEL_PATH = os.environ.get("E5_MODEL_PATH", "intfloat/e5-large-v2")
 
-_tokenizer = AutoTokenizer.from_pretrained(_MODEL_NAME)
-_model = AutoModel.from_pretrained(_MODEL_NAME)
+_tokenizer = AutoTokenizer.from_pretrained(_MODEL_PATH, local_files_only=True)
+_model = AutoModel.from_pretrained(_MODEL_PATH, local_files_only=True)
 _model.eval()  # important
 
 

@@ -434,10 +434,65 @@ app = FastAPI(
     version=API_VERSION,
     description=API_DESCRIPTION,
     openapi_tags=tags_metadata,
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url=None,  # Disable default, use custom offline version
+    redoc_url=None,  # Disable default, use custom offline version
     openapi_url="/openapi.json",
 )
+
+# Mount static files for offline Swagger UI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
+import os
+
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    """Serve Swagger UI with local static files (works offline)."""
+    return HTMLResponse("""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Document Analysis API - Swagger UI</title>
+    <link rel="stylesheet" type="text/css" href="/static/swagger-ui/swagger-ui.css">
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="/static/swagger-ui/swagger-ui-bundle.js"></script>
+    <script>
+        window.onload = function() {
+            SwaggerUIBundle({
+                url: '/openapi.json',
+                dom_id: '#swagger-ui',
+                presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+                layout: "BaseLayout"
+            });
+        };
+    </script>
+</body>
+</html>
+""")
+
+@app.get("/redoc", include_in_schema=False)
+async def custom_redoc_html():
+    """Serve ReDoc with local static files (works offline)."""
+    return HTMLResponse("""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Document Analysis API - ReDoc</title>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>body { margin: 0; padding: 0; }</style>
+</head>
+<body>
+    <redoc spec-url='/openapi.json'></redoc>
+    <script src="/static/redoc/redoc.standalone.js"></script>
+</body>
+</html>
+""")
 
 @app.on_event("startup")
 async def startup_event():
