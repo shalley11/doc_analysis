@@ -2,8 +2,26 @@
 
 A comprehensive PDF processing and AI-powered summarization system that extracts, chunks, embeds, and indexes document content for semantic search and intelligent summarization.
 
+## Quick Start
+
+```bash
+# 1. Clone and configure
+git clone git@github.com:shalley11/doc_analysis.git
+cd doc_analysis
+cp .env.example .env
+
+# 2. Start with Docker
+docker compose up -d
+
+# 3. Access the API
+open http://localhost:8000/docs
+```
+
+**Prerequisites:** Docker, Redis, Milvus, and vLLM/Ollama running on host.
+
 ## Table of Contents
 
+- [Quick Start](#quick-start)
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Features](#features)
@@ -13,6 +31,7 @@ A comprehensive PDF processing and AI-powered summarization system that extracts
 - [API Reference](#api-reference)
 - [WebSocket Events](#websocket-events)
 - [Project Structure](#project-structure)
+- [Airgapped Deployment](#airgapped-deployment)
 - [Dependencies](#dependencies)
 
 ## Overview
@@ -45,8 +64,8 @@ The Document Analysis API provides a complete pipeline for processing PDF docume
                     ┌───────────────┼───────────────┐
                     ▼               ▼               ▼
             ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
-            │    Redis    │ │   Milvus    │ │   Ollama    │
-            │  Job Queue  │ │ Vector DB   │ │ Vision/LLM  │
+            │    Redis    │ │   Milvus    │ │ vLLM/Ollama │
+            │  Job Queue  │ │ Vector DB   │ │  LLM API    │
             │   Pub/Sub   │ │             │ │             │
             └─────────────┘ └─────────────┘ └─────────────┘
                     │
@@ -101,7 +120,7 @@ PDF Upload → Extract (pdfplumber/PyMuPDF) → Chunk (semantic) → Vision (Oll
 - Table image analysis
 - Document image understanding
 - Parallel batch processing
-- Ollama integration (Gemma3)
+- vLLM or Ollama integration (Gemma3)
 
 ### Summarization
 - Multiple summary types (brief, bulletwise, detailed, executive)
@@ -119,54 +138,101 @@ PDF Upload → Extract (pdfplumber/PyMuPDF) → Chunk (semantic) → Vision (Oll
 
 ### Prerequisites
 
-- Python 3.10+
-- Redis Server
-- Milvus Vector Database
-- Ollama (for vision and LLM models)
+- Docker & Docker Compose
+- Redis Server (on host or container)
+- Milvus Vector Database (on host or container)
+- vLLM or Ollama (for LLM inference)
+- NVIDIA GPU with CUDA 12.4+ (for worker)
 
-### Setup
+### Option 1: Docker Deployment (Recommended)
 
-1. **Clone the repository**
-   ```bash
-   git clone git@github.com:shalley11/doc_analysis.git
-   cd doc_analysis
-   ```
+```bash
+# 1. Clone the repository
+git clone git@github.com:shalley11/doc_analysis.git
+cd doc_analysis
 
-2. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+# 2. Create environment file
+cp .env.example .env
+# Edit .env with your settings
 
-3. **Start required services**
-   ```bash
-   # Redis
-   redis-server
+# 3. Build and start containers
+docker compose up -d
 
-   # Milvus (using Docker)
-   docker run -d --name milvus -p 19530:19530 milvusdb/milvus:latest
+# 4. Check status
+docker compose ps
+docker compose logs -f api
+```
 
-   # Ollama
-   ollama serve
-   ollama pull gemma3:4b
-   ```
+### Option 2: Local Development
 
-4. **Start the RQ worker**
-   ```bash
-   python -m doc_analysis.workers.rq_worker
-   ```
+```bash
+# 1. Clone and install
+git clone git@github.com:shalley11/doc_analysis.git
+cd doc_analysis
+pip install -r requirements.txt
 
-5. **Start the API server**
-   ```bash
-   uvicorn doc_analysis.api:app --host 0.0.0.0 --port 8000
-   ```
+# 2. Start required services
+redis-server                    # Redis
+docker run -d -p 19530:19530 milvusdb/milvus:latest  # Milvus
+
+# 3. Start vLLM or Ollama
+# vLLM:
+vllm serve google/gemma-3-12b-it --port 8080
+# OR Ollama:
+ollama serve && ollama pull gemma3:4b
+
+# 4. Start the worker (in separate terminal)
+python -m doc_analysis.workers.rq_worker
+
+# 5. Start the API server
+uvicorn doc_analysis.api:app --host 0.0.0.0 --port 8000 --reload
+```
 
 ## Configuration
 
-Configuration is managed in `config.py`:
+### Environment Variables (.env)
+
+Copy `.env.example` to `.env` and configure:
+
+```bash
+# API settings
+API_PORT=8000
+
+# Redis settings
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+# Milvus settings
+MILVUS_HOST=localhost
+MILVUS_PORT=19530
+# Milvus authentication (optional)
+MILVUS_USER=
+MILVUS_PASSWORD=
+MILVUS_TOKEN=
+
+# E5 Embedding Model (local path for offline use)
+E5_MODEL_PATH=/app/models/e5-large-v2
+
+# LLM Backend: "vllm" or "ollama"
+LLM_BACKEND=vllm
+VLLM_URL=http://localhost:8080
+SUMMARY_MODEL=gemma-3-12b-it
+
+# For Ollama backend (alternative)
+# LLM_BACKEND=ollama
+# OLLAMA_URL=http://localhost:11434/api/generate
+
+# Offline mode (for airgapped systems)
+HF_HUB_OFFLINE=1
+TRANSFORMERS_OFFLINE=1
+```
+
+### Application Settings (config.py)
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `MAX_PDFS_PER_BATCH` | 5 | Maximum PDFs per upload |
+| `MAX_PAGES_PER_PDF` | 50 | Maximum pages per PDF |
 | `BATCH_TTL_SECONDS` | 86400 | Data retention (24 hours) |
 | `EMBEDDING_DIM` | 1024 | E5-large embedding dimension |
 | `CHUNK_MIN_WORDS` | 50 | Minimum words per chunk |
@@ -174,19 +240,7 @@ Configuration is managed in `config.py`:
 | `CHUNK_OVERLAP_WORDS` | 50 | Overlap between chunks |
 | `VISION_BATCH_SIZE` | 3 | Parallel vision processing |
 | `VISION_TIMEOUT` | 900 | Vision processing timeout (15 min) |
-| `SUMMARY_MODEL` | gemma3:4b | Ollama model for summarization |
 | `SUMMARY_STORAGE_MODE` | hybrid | Redis intermediate, Milvus final |
-
-### Environment Variables
-
-```bash
-REDIS_HOST=localhost
-REDIS_PORT=6379
-MILVUS_HOST=localhost
-MILVUS_PORT=19530
-OLLAMA_HOST=localhost
-OLLAMA_PORT=11434
-```
 
 ## Usage
 
@@ -306,10 +360,23 @@ const summaryWs = new WebSocket('ws://localhost:8000/ws/summary/550e8400-e29b-41
 
 ## API Reference
 
-Access interactive API documentation:
+### Interactive Documentation
+
+Access API documentation (works offline):
 
 - **Swagger UI**: http://localhost:8000/docs
 - **ReDoc**: http://localhost:8000/redoc
+- **OpenAPI JSON**: http://localhost:8000/openapi.json
+
+### Quick Test
+
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# API info
+curl http://localhost:8000/
+```
 
 ### Endpoints Summary
 
@@ -441,6 +508,57 @@ doc_analysis/
     ├── cleanup_service.py
     └── run_cleanup.py
 ```
+
+## Airgapped Deployment
+
+For systems without internet access:
+
+### 1. Prepare on Internet-Connected Machine
+
+```bash
+# Build Docker image
+docker compose build
+
+# Save Docker image
+docker save doc-analysis:latest | gzip > doc-analysis-image.tar.gz
+
+# Create source tarball (includes models)
+tar -czvf doc-analysis-src.tar.gz \
+  --exclude='.git' \
+  --exclude='__pycache__' \
+  --exclude='*.pyc' \
+  .
+```
+
+### 2. Transfer to Airgapped System
+
+Transfer these files:
+- `doc-analysis-image.tar.gz` (Docker image)
+- `doc-analysis-src.tar.gz` (source code + models)
+
+### 3. Deploy on Airgapped System
+
+```bash
+# Load Docker image
+gunzip -c doc-analysis-image.tar.gz | docker load
+
+# Extract source
+tar -xzvf doc-analysis-src.tar.gz -C /opt/doc_analysis
+cd /opt/doc_analysis
+
+# Configure
+cp .env.example .env
+# Edit .env with correct host addresses
+
+# Start
+docker compose up -d
+```
+
+### Offline Features
+
+- **Swagger/ReDoc**: Self-hosted static files (no CDN)
+- **E5 Model**: Loads from local path (`E5_MODEL_PATH`)
+- **Environment**: `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`
 
 ## Dependencies
 
