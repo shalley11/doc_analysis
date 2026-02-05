@@ -50,7 +50,7 @@ def create_temp_collection(
         }
     )
 
-    # Create index for summary embedding (unified for table/image summaries)
+    # Create index for summary embedding (requires Milvus 2.4+)
     collection.create_index(
         field_name="summary_embedding",
         index_params={

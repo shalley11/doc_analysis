@@ -18,7 +18,9 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass
 
 from doc_analysis.config import (
+    LLM_BACKEND,
     OLLAMA_URL,
+    VLLM_URL,
     SUMMARY_MODEL,
     SUMMARY_TIMEOUT,
     SUMMARY_MAX_WORDS_PER_BATCH,
@@ -175,9 +177,9 @@ def _prepare_batch_content(chunks: List[Dict]) -> str:
 
 
 def _call_llm(prompt: str, config: SummarizerConfig, context: str = "unknown", batch_id: str = None) -> str:
-    """Call Ollama LLM with detailed logging and event publishing."""
+    """Call LLM (Ollama or vLLM) with detailed logging and event publishing."""
     prompt_words = _count_words(prompt)
-    logger.debug(f"[LLM] {context} | model={config.model} | prompt_words={prompt_words} | temp={config.temperature}")
+    logger.debug(f"[LLM] {context} | backend={LLM_BACKEND} | model={config.model} | prompt_words={prompt_words} | temp={config.temperature}")
 
     # Publish LLM call started event
     if batch_id:
@@ -185,23 +187,37 @@ def _call_llm(prompt: str, config: SummarizerConfig, context: str = "unknown", b
 
     start_time = time.time()
     try:
-        response = requests.post(
-            OLLAMA_URL,
-            json={
+        if LLM_BACKEND == "vllm":
+            # vLLM uses OpenAI-compatible API
+            url = f"{VLLM_URL}/v1/completions"
+            payload = {
                 "model": config.model,
                 "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": config.temperature,
-                    "num_predict": ASYNC_LLM_NUM_PREDICT
-                }
-            },
-            timeout=SUMMARY_TIMEOUT
-        )
-        response.raise_for_status()
+                "max_tokens": ASYNC_LLM_NUM_PREDICT,
+                "temperature": config.temperature,
+            }
+            response = requests.post(url, json=payload, timeout=SUMMARY_TIMEOUT)
+            response.raise_for_status()
+            result = response.json().get("choices", [{}])[0].get("text", "").strip()
+        else:
+            # Ollama API format
+            response = requests.post(
+                OLLAMA_URL,
+                json={
+                    "model": config.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": config.temperature,
+                        "num_predict": ASYNC_LLM_NUM_PREDICT
+                    }
+                },
+                timeout=SUMMARY_TIMEOUT
+            )
+            response.raise_for_status()
+            result = response.json().get("response", "").strip()
 
         elapsed = time.time() - start_time
-        result = response.json().get("response", "").strip()
         result_words = _count_words(result)
 
         logger.info(f"[LLM] {context} | SUCCESS | elapsed={elapsed:.2f}s | response_words={result_words}")
@@ -256,7 +272,7 @@ async def _call_llm_async(
     batch_id: str = None
 ) -> str:
     """
-    Call LLM asynchronously for parallel batch processing.
+    Call LLM (Ollama or vLLM) asynchronously for parallel batch processing.
 
     Args:
         prompt: The prompt text
@@ -269,7 +285,7 @@ async def _call_llm_async(
         Generated summary text
     """
     prompt_words = _count_words(prompt)
-    logger.debug(f"[ASYNC_LLM] {context} | model={config.model} | prompt_words={prompt_words}")
+    logger.debug(f"[ASYNC_LLM] {context} | backend={LLM_BACKEND} | model={config.model} | prompt_words={prompt_words}")
 
     # Publish LLM call started event
     if batch_id:
@@ -278,33 +294,52 @@ async def _call_llm_async(
     start_time = time.time()
 
     try:
-        async with session.post(
-            OLLAMA_URL,
-            json={
+        if LLM_BACKEND == "vllm":
+            # vLLM uses OpenAI-compatible API
+            url = f"{VLLM_URL}/v1/completions"
+            payload = {
                 "model": config.model,
                 "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": config.temperature,
-                    "num_predict": ASYNC_LLM_NUM_PREDICT
-                }
-            },
-            timeout=aiohttp.ClientTimeout(total=SUMMARY_TIMEOUT)
-        ) as response:
-            response.raise_for_status()
-            data = await response.json()
+                "max_tokens": ASYNC_LLM_NUM_PREDICT,
+                "temperature": config.temperature,
+            }
+            async with session.post(
+                url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=SUMMARY_TIMEOUT)
+            ) as response:
+                response.raise_for_status()
+                data = await response.json()
+                result = data.get("choices", [{}])[0].get("text", "").strip()
+        else:
+            # Ollama API format
+            async with session.post(
+                OLLAMA_URL,
+                json={
+                    "model": config.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": config.temperature,
+                        "num_predict": ASYNC_LLM_NUM_PREDICT
+                    }
+                },
+                timeout=aiohttp.ClientTimeout(total=SUMMARY_TIMEOUT)
+            ) as response:
+                response.raise_for_status()
+                data = await response.json()
+                result = data.get("response", "").strip()
 
-            elapsed = time.time() - start_time
-            result = data.get("response", "").strip()
-            result_words = _count_words(result)
+        elapsed = time.time() - start_time
+        result_words = _count_words(result)
 
-            logger.info(f"[ASYNC_LLM] {context} | SUCCESS | elapsed={elapsed:.2f}s | response_words={result_words}")
+        logger.info(f"[ASYNC_LLM] {context} | SUCCESS | elapsed={elapsed:.2f}s | response_words={result_words}")
 
-            # Publish LLM call completed event
-            if batch_id:
-                _publish_event(batch_id, summary_llm_call_completed(batch_id, context, elapsed, result_words))
+        # Publish LLM call completed event
+        if batch_id:
+            _publish_event(batch_id, summary_llm_call_completed(batch_id, context, elapsed, result_words))
 
-            return result
+        return result
 
     except asyncio.TimeoutError:
         elapsed = time.time() - start_time

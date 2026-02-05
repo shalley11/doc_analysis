@@ -112,6 +112,7 @@ def get_chunk_schema(dim: int):
             dtype=DataType.VARCHAR,
             max_length=8192
         ),
+        # Summary embedding (requires Milvus 2.4+)
         FieldSchema(
             name="summary_embedding",
             dtype=DataType.FLOAT_VECTOR,

@@ -137,7 +137,7 @@ class CleanupService:
         """
         Clean up old batch PDF files from /tmp.
 
-        Matches pattern: /tmp/{batch_id}_pdf_*.pdf
+        Matches pattern: /tmp/doc_images/{batch_id}_pdf_*.pdf
 
         Returns:
             Tuple of (files_deleted, bytes_freed, errors)
@@ -146,7 +146,7 @@ class CleanupService:
             logger.debug(f"[TEMP_PDFS] Skipped (disabled in config)")
             return 0, 0, 0
 
-        tmp_dir = Path("/tmp")
+        tmp_dir = Path("/tmp/doc_images")
 
         logger.info(f"[TEMP_PDFS] Scanning {tmp_dir} for batch PDFs")
 

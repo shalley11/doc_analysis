@@ -7,6 +7,7 @@ import redis
 from typing import Optional
 from doc_analysis.realtime.events import Event
 from doc_analysis.logging_config import get_api_logger
+from doc_analysis import config
 
 logger = get_api_logger()
 
@@ -31,10 +32,10 @@ class EventPublisher:
 
     _instance: Optional["EventPublisher"] = None
 
-    def __init__(self, redis_host: str = "localhost", redis_port: int = 6379):
+    def __init__(self, redis_host: str = None, redis_port: int = None):
         """Initialize Redis connection for publishing."""
-        self.redis_host = redis_host
-        self.redis_port = redis_port
+        self.redis_host = redis_host or config.REDIS_HOST
+        self.redis_port = redis_port or config.REDIS_PORT
         self._redis: Optional[redis.Redis] = None
 
     @property

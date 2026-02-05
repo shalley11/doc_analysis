@@ -2,8 +2,9 @@ from redis import Redis
 from rq import Queue
 
 from doc_analysis.workers.pdf_ingestion import ingest_batch_pdfs
+from doc_analysis import config
 
-redis_conn = Redis(host="localhost", port=6379)
+redis_conn = Redis(host=config.REDIS_HOST, port=config.REDIS_PORT)
 queue = Queue("pdf_ingestion", connection=redis_conn)
 
 

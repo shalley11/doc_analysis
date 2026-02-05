@@ -13,7 +13,9 @@ from datetime import datetime
 from doc_analysis.config import (
     SUMMARY_STORAGE_MODE,
     SUMMARY_REDIS_TTL,
-    BATCH_TTL_SECONDS
+    BATCH_TTL_SECONDS,
+    REDIS_HOST,
+    REDIS_PORT
 )
 from doc_analysis.logging_config import get_api_logger
 
@@ -27,7 +29,7 @@ def _get_redis() -> redis.Redis:
     """Get Redis client (lazy initialization)."""
     global _redis_client
     if _redis_client is None:
-        _redis_client = redis.Redis(host="localhost", port=6379, decode_responses=True)
+        _redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
     return _redis_client
 
 

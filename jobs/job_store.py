@@ -10,8 +10,9 @@ import time
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from redis import Redis
+from doc_analysis import config
 
-redis = Redis(host="localhost", port=6379, decode_responses=True)
+redis_client = Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, decode_responses=True)
 
 
 # ============================================================================
@@ -172,7 +173,7 @@ def create_job(batch_id: str, pdf_names: List[str]):
     job["document_processing"]["stages"]["queued"]["started_at"] = time.time()
     job["document_processing"]["stages"]["queued"]["completed_at"] = time.time()
 
-    redis.set(_job_key(batch_id), json.dumps(job))
+    redis_client.set(_job_key(batch_id), json.dumps(job))
 
 
 # ============================================================================
@@ -187,7 +188,7 @@ def update_batch_status(batch_id: str, status: str, error: Optional[str] = None)
     if error:
         job["error"] = error
     job["updated_at"] = time.time()
-    redis.set(_job_key(batch_id), json.dumps(job))
+    redis_client.set(_job_key(batch_id), json.dumps(job))
 
 
 def start_stage(batch_id: str, stage: str, details: Optional[str] = None):
@@ -205,7 +206,7 @@ def start_stage(batch_id: str, stage: str, details: Optional[str] = None):
 
     job["status"] = "processing"
     job["updated_at"] = time.time()
-    redis.set(_job_key(batch_id), json.dumps(job))
+    redis_client.set(_job_key(batch_id), json.dumps(job))
 
 
 def complete_stage(batch_id: str, stage: str, details: Optional[str] = None):
@@ -224,7 +225,7 @@ def complete_stage(batch_id: str, stage: str, details: Optional[str] = None):
         job["status"] = "completed"
 
     job["updated_at"] = time.time()
-    redis.set(_job_key(batch_id), json.dumps(job))
+    redis_client.set(_job_key(batch_id), json.dumps(job))
 
 
 def skip_stage(batch_id: str, stage: str, reason: Optional[str] = None):
@@ -236,7 +237,7 @@ def skip_stage(batch_id: str, stage: str, reason: Optional[str] = None):
     module["stages"][stage]["details"] = reason or "Skipped"
 
     job["updated_at"] = time.time()
-    redis.set(_job_key(batch_id), json.dumps(job))
+    redis_client.set(_job_key(batch_id), json.dumps(job))
 
 
 def fail_stage(batch_id: str, stage: str, error: str):
@@ -252,7 +253,7 @@ def fail_stage(batch_id: str, stage: str, error: str):
     job["status"] = "failed"
     job["error"] = error
     job["updated_at"] = time.time()
-    redis.set(_job_key(batch_id), json.dumps(job))
+    redis_client.set(_job_key(batch_id), json.dumps(job))
 
 
 def update_stats(batch_id: str, **kwargs):
@@ -265,7 +266,7 @@ def update_stats(batch_id: str, **kwargs):
             stats[key] = value
 
     job["updated_at"] = time.time()
-    redis.set(_job_key(batch_id), json.dumps(job))
+    redis_client.set(_job_key(batch_id), json.dumps(job))
 
 
 def update_pdf_status(batch_id: str, pdf_id: str, status: str, error=None, **kwargs):
@@ -280,7 +281,7 @@ def update_pdf_status(batch_id: str, pdf_id: str, status: str, error=None, **kwa
 
     job["document_processing"]["pdfs"][pdf_id] = pdf_info
     job["updated_at"] = time.time()
-    redis.set(_job_key(batch_id), json.dumps(job))
+    redis_client.set(_job_key(batch_id), json.dumps(job))
 
 
 # ============================================================================
@@ -301,7 +302,7 @@ def start_summary_stage(batch_id: str, stage: str, details: Optional[str] = None
         module["stages"][stage]["details"] = details
 
     job["updated_at"] = time.time()
-    redis.set(_job_key(batch_id), json.dumps(job))
+    redis_client.set(_job_key(batch_id), json.dumps(job))
 
 
 def complete_summary_stage(batch_id: str, stage: str, details: Optional[str] = None):
@@ -319,7 +320,7 @@ def complete_summary_stage(batch_id: str, stage: str, details: Optional[str] = N
         module["status"] = "completed"
 
     job["updated_at"] = time.time()
-    redis.set(_job_key(batch_id), json.dumps(job))
+    redis_client.set(_job_key(batch_id), json.dumps(job))
 
 
 def fail_summary_stage(batch_id: str, stage: str, error: str):
@@ -333,7 +334,7 @@ def fail_summary_stage(batch_id: str, stage: str, error: str):
     module["status"] = "failed"
 
     job["updated_at"] = time.time()
-    redis.set(_job_key(batch_id), json.dumps(job))
+    redis_client.set(_job_key(batch_id), json.dumps(job))
 
 
 def update_summary_stats(batch_id: str, **kwargs):
@@ -346,7 +347,7 @@ def update_summary_stats(batch_id: str, **kwargs):
             stats[key] = value
 
     job["updated_at"] = time.time()
-    redis.set(_job_key(batch_id), json.dumps(job))
+    redis_client.set(_job_key(batch_id), json.dumps(job))
 
 
 def update_summary_status(
@@ -371,7 +372,7 @@ def update_summary_status(
     }
 
     job["updated_at"] = time.time()
-    redis.set(_job_key(batch_id), json.dumps(job))
+    redis_client.set(_job_key(batch_id), json.dumps(job))
 
 
 # ============================================================================
@@ -380,7 +381,7 @@ def update_summary_status(
 
 def get_job_raw(batch_id: str) -> Dict:
     """Get job status with raw Unix timestamps (for internal use)."""
-    data = redis.get(_job_key(batch_id))
+    data = redis_client.get(_job_key(batch_id))
     if not data:
         raise KeyError(f"Job {batch_id} not found")
     return json.loads(data)

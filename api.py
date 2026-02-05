@@ -4,11 +4,13 @@ import uuid
 import shutil
 
 from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect, Query, HTTPException, status, Path
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field
 
 # ---- logging ----
 from doc_analysis.logging_config import get_api_logger, setup_all_loggers
+from doc_analysis import config
 setup_all_loggers()
 logger = get_api_logger()
 
@@ -439,6 +441,15 @@ app = FastAPI(
     openapi_url="/openapi.json",
 )
 
+# CORS middleware - allow all origins for development/airgapped use
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Mount static files for offline Swagger UI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
@@ -766,7 +777,7 @@ def upload_pdfs(
 
     for idx, file in enumerate(files):
         pdf_id = f"pdf_{idx + 1}"
-        path = f"/tmp/{batch_id}_{pdf_id}.pdf"
+        path = f"/tmp/doc_images/{batch_id}_{pdf_id}.pdf"
 
         with open(path, "wb") as f:
             shutil.copyfileobj(file.file, f)
@@ -1218,7 +1229,7 @@ def get_websocket_stats(
     # Fetch batches from Redis
     all_batches = []
     try:
-        r = redis.Redis(host='localhost', port=6379, decode_responses=True)
+        r = redis.Redis(host=config.REDIS_HOST, port=config.REDIS_PORT, decode_responses=True)
 
         if batch_id:
             # Fetch only the specific batch
